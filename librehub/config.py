@@ -38,6 +38,8 @@ def config_path() -> Path:
 
 
 def _validate_bindings(bindings: dict) -> None:
+    if not isinstance(bindings, dict):
+        raise ConfigError("bindings must be a JSON object")
     for fcode, out in bindings.items():
         if fcode not in keys.FSIGNALS:
             raise ConfigError(f"binding key {fcode!r} is not a valid signal (KEY_F13..KEY_F24)")
@@ -63,10 +65,23 @@ def load(path: Path) -> Config:
         raise ConfigError(f"config is not valid JSON: {e}") from e
     try:
         version = int(raw["version"])
-        managed = {str(k): str(v) for k, v in raw.get("managed_buttons", {}).items()}
-        games = {str(aid): _game_from_dict(g) for aid, g in raw.get("games", {}).items()}
+        managed_buttons_raw = raw.get("managed_buttons", {})
+        if not isinstance(managed_buttons_raw, dict):
+            raise ConfigError("managed_buttons must be a JSON object")
+        managed = {}
+        for k, v in managed_buttons_raw.items():
+            signal_code = str(v)
+            if signal_code not in keys.FSIGNALS:
+                raise ConfigError(f"managed_buttons value {signal_code!r} is not a valid signal (KEY_F13..KEY_F24)")
+            managed[str(k)] = signal_code
+        games_raw = raw.get("games", {})
+        if not isinstance(games_raw, dict):
+            raise ConfigError("games must be a JSON object")
+        games = {str(aid): _game_from_dict(g) for aid, g in games_raw.items()}
         default = _game_from_dict(raw.get("default", {"name": "default", "bindings": {}}))
     except (KeyError, TypeError, ValueError) as e:
+        raise ConfigError(f"malformed config: {e}") from e
+    except AttributeError as e:
         raise ConfigError(f"malformed config: {e}") from e
     return Config(version=version, managed_buttons=managed, games=games, default=default)
 

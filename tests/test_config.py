@@ -55,3 +55,47 @@ def test_load_rejects_unknown_output_key(tmp_path: Path):
 def test_load_missing_file_raises(tmp_path: Path):
     with pytest.raises(C.ConfigError):
         C.load(tmp_path / "does-not-exist.json")
+
+
+def test_load_rejects_managed_buttons_non_fsignals_value(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "version": 1, "managed_buttons": {"6": "KEY_GARBAGE"},
+        "games": {},
+        "default": {"name": "default", "bindings": {}},
+    }))
+    with pytest.raises(C.ConfigError):
+        C.load(p)
+
+
+def test_load_rejects_non_dict_games(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "version": 1, "managed_buttons": {},
+        "games": ["not", "a", "dict"],
+        "default": {"name": "default", "bindings": {}},
+    }))
+    with pytest.raises(C.ConfigError):
+        C.load(p)
+
+
+def test_load_rejects_non_dict_managed_buttons(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "version": 1, "managed_buttons": ["not", "a", "dict"],
+        "games": {},
+        "default": {"name": "default", "bindings": {}},
+    }))
+    with pytest.raises(C.ConfigError):
+        C.load(p)
+
+
+def test_load_rejects_non_dict_bindings(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "version": 1, "managed_buttons": {},
+        "games": {"1": {"name": "x", "bindings": ["not", "a", "dict"]}},
+        "default": {"name": "default", "bindings": {}},
+    }))
+    with pytest.raises(C.ConfigError):
+        C.load(p)
