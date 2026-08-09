@@ -1,4 +1,13 @@
-"""Thin wrapper over the `ratbagctl` CLI (Layer 1 signal setup)."""
+"""Thin wrapper over the `ratbagctl` CLI (Layer 1 signal setup).
+
+Backs the one-time mouse setup described in the README (assigning each
+physical button a unique KEY_F13-KEY_F24 signal in the mouse's onboard
+profile 0, and activating that profile). That step is currently manual;
+this module is also the intended foundation for the planned guided
+in-app first-run setup, so it is intentionally invoked by setup tooling
+and documentation rather than by the GUI/daemon at runtime — do not
+treat it as dead code.
+"""
 from __future__ import annotations
 
 import re
@@ -53,11 +62,11 @@ def assign_signal(dev: str, profile: int, button: int, fcode: str,
                   run=subprocess.run) -> None:
     res = _run(["ratbagctl", dev, "profile", str(profile), "button", str(button),
                 "action", "set", "macro", fcode], run)
-    if getattr(res, "returncode", 0) != 0:
+    if res.returncode != 0:
         raise RatbagError(f"assigning {fcode} to button {button} failed")
 
 
 def set_active_profile(dev: str, profile: int, run=subprocess.run) -> None:
     res = _run(["ratbagctl", dev, "profile", "active", "set", str(profile)], run)
-    if getattr(res, "returncode", 0) != 0:
+    if res.returncode != 0:
         raise RatbagError(f"setting active profile {profile} failed")

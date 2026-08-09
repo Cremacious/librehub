@@ -44,15 +44,22 @@ class Engine:
     async def run(self, device_path: str, on_detect=None) -> None:
         dev = InputDevice(device_path)
         dev.grab()
+        pending_releases: set[str] = set()
         try:
             async for event in dev.async_read_loop():
                 if event.type != ecodes.EV_KEY:
                     continue
                 name = ecodes.KEY.get(event.code)
+                if isinstance(name, list):
+                    name = name[0] if name else None
                 if name is None:
                     continue
-                if on_detect is not None and event.value == 1 and on_detect(name):
+                if event.value == 1 and on_detect is not None and on_detect(name):
+                    pending_releases.add(name)
                     continue  # consumed by detect mode
+                if event.value == 0 and name in pending_releases:
+                    pending_releases.discard(name)
+                    continue  # swallow paired release for a detected button
                 self.handle_event(name, event.value)
         finally:
             dev.ungrab()

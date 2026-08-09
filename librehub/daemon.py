@@ -78,7 +78,7 @@ class Daemon:
             elif cmd == "current_appid":
                 resp = {"appid": self.appid_fn()}
             elif cmd == "detect":
-                self._detect_future = asyncio.get_event_loop().create_future()
+                self._detect_future = asyncio.get_running_loop().create_future()
                 try:
                     fcode = await asyncio.wait_for(self._detect_future, timeout=10)
                 except asyncio.TimeoutError:
@@ -111,7 +111,7 @@ class Daemon:
         else:
             print(f"librehub: no signal device for '{self.model}' found; "
                   "remapping disabled until mouse is present", file=sys.stderr)
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def main(argv=None) -> int:
