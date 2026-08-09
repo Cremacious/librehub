@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LibreHub
+Comment=Per-game mouse button remapper
+Exec=librehub
+Terminal=false
+Categories=Utility;Settings;
