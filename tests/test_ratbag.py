@@ -103,3 +103,42 @@ def test_device_info_raises_on_failure():
     fr = FakeRun(returncode=1)
     with pytest.raises(ratbag.RatbagError):
         ratbag.device_info("dev0", run=fr)
+
+
+def test_signals_in_use_detects_fsignal_macros():
+    buttons = {6: "macro '↕F13'", 7: "macro '↕F14'", 0: "'button 1'"}
+    assert ratbag.signals_in_use(buttons) == {"KEY_F13", "KEY_F14"}
+
+
+def test_signals_in_use_none_present():
+    buttons = {0: "'button 1'", 1: "'button 2'"}
+    assert ratbag.signals_in_use(buttons) == set()
+
+
+def test_plan_signal_assignment_fresh():
+    final, new = ratbag.plan_signal_assignment(
+        previously_managed={}, checked=[6, 7], reserved=set())
+    assert final == {"6": "KEY_F13", "7": "KEY_F14"}
+    assert new == {6: "KEY_F13", 7: "KEY_F14"}
+
+
+def test_plan_signal_assignment_kept_retains_code():
+    final, new = ratbag.plan_signal_assignment(
+        previously_managed={"6": "KEY_F13"}, checked=[6, 7],
+        reserved={"KEY_F13"})
+    assert final == {"6": "KEY_F13", "7": "KEY_F14"}
+    assert new == {7: "KEY_F14"}
+
+
+def test_plan_signal_assignment_orphan_not_reused():
+    final, new = ratbag.plan_signal_assignment(
+        previously_managed={}, checked=[9], reserved={"KEY_F13"})
+    assert final == {"9": "KEY_F14"}
+    assert new == {9: "KEY_F14"}
+
+
+def test_plan_signal_assignment_exhaustion_propagates():
+    reserved = {f"KEY_F{n}" for n in range(13, 25)}
+    with pytest.raises(ratbag.RatbagError):
+        ratbag.plan_signal_assignment(
+            previously_managed={}, checked=[0], reserved=reserved)

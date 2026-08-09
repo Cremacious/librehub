@@ -109,3 +109,55 @@ def next_free_signals(used, count: int) -> list[str]:
             f"not enough free signals: need {count}, have {len(free)}"
         )
     return free[:count]
+
+
+def signals_in_use(profile_buttons: dict[int, str]) -> set[str]:
+    """Return the F-signals currently assigned to any button in the map.
+
+    ratbagctl renders a KEY_F13 macro with the token after `KEY_` (e.g.
+    `F13`) embedded in the action text, e.g. `macro '↕F13'`. We detect a
+    signal by substring match of that token against each action text.
+    """
+    result: set[str] = set()
+    for action in profile_buttons.values():
+        for fcode in keys.FSIGNALS:
+            token = fcode.removeprefix("KEY_")
+            if token in action:
+                result.add(fcode)
+    return result
+
+
+def plan_signal_assignment(
+    previously_managed: dict[str, str], checked, reserved: set[str]
+) -> tuple[dict[str, str], dict[int, str]]:
+    """Plan fcode allocation for the checked buttons.
+
+    `previously_managed` is the current {index_str: fcode} mapping,
+    `checked` is the iterable of button indices the user checked, and
+    `reserved` is the set of fcodes that must not be handed to a newly
+    allocated button (e.g. signals live on the hardware but no longer
+    tracked, or codes already in use by other managed buttons).
+
+    Returns (final_managed, new_assignments):
+      - final_managed: {str(index): fcode} for every checked index.
+      - new_assignments: {index: fcode} for only the newly-allocated
+        buttons (the ones needing a hardware assign_signal call).
+    """
+    checked = list(checked)
+    kept: dict[int, str] = {}
+    new_indices: list[int] = []
+    for idx in checked:
+        key = str(idx)
+        if key in previously_managed:
+            kept[idx] = previously_managed[key]
+        else:
+            new_indices.append(idx)
+
+    used = set(reserved) | set(kept.values())
+    new_codes = next_free_signals(used=used, count=len(new_indices))
+    new_assignments = dict(zip(new_indices, new_codes))
+
+    final_managed = {str(idx): fcode for idx, fcode in kept.items()}
+    final_managed.update(
+        {str(idx): fcode for idx, fcode in new_assignments.items()})
+    return final_managed, new_assignments

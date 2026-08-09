@@ -262,36 +262,31 @@ class Window(Gtk.Window):
         if checked is None:
             return
 
-        existing = self.config.managed_buttons
-        kept: dict[int, str] = {}
-        new_indices: list[int] = []
-        for idx in checked:
-            key = str(idx)
-            if key in existing:
-                kept[idx] = existing[key]
-            else:
-                new_indices.append(idx)
+        # Base collision-avoidance on the mouse's ACTUAL live signals, not
+        # just what we happen to be tracking: a previously-managed button
+        # that got unchecked has its fcode dropped from managed_buttons,
+        # but the signal stays wired into the mouse's onboard profile (we
+        # don't reset it here) — so it must still count as reserved, or a
+        # later run could reissue it to a different button.
+        reserved = (set(self.config.managed_buttons.values())
+                    | ratbag.signals_in_use(buttons))
 
         try:
-            if new_indices:
-                # Treat every fcode ever assigned (not just the ones we're
-                # keeping) as in-use. A button that was previously managed
-                # but got unchecked still has its old signal wired into the
-                # mouse's onboard profile — we don't reset its hardware here
-                # — so handing that "freed" fcode to a different button
-                # would make two physical buttons emit the same signal.
-                used = set(self.config.managed_buttons.values())
-                new_codes = ratbag.next_free_signals(
-                    used=used, count=len(new_indices))
-                for idx, fcode in zip(new_indices, new_codes):
-                    ratbag.assign_signal(dev, 0, idx, fcode)
-                    kept[idx] = fcode
+            final_managed, new_assignments = ratbag.plan_signal_assignment(
+                self.config.managed_buttons, checked, reserved)
+        except ratbag.RatbagError as e:
+            self._error(f"mouse setup failed: {e}")
+            return
+
+        try:
+            for idx, fcode in new_assignments.items():
+                ratbag.assign_signal(dev, 0, idx, fcode)
             ratbag.set_active_profile(dev, 0)
         except ratbag.RatbagError as e:
             self._error(f"mouse setup failed: {e}")
             return
 
-        self.config.managed_buttons = {str(idx): fcode for idx, fcode in kept.items()}
+        self.config.managed_buttons = final_managed
         try:
             C.save(self.config, self.cfg_path)
         except OSError as e:
@@ -305,7 +300,7 @@ class Window(Gtk.Window):
             transient_for=self, modal=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.NONE,
-            text="Mouse set up. The daemon must reload to pick up the change.")
+            text="Mouse set up. The daemon must be restarted to pick up the change.")
         dlg.format_secondary_text(
             "Note: unchecking a button here stops LibreHub from managing "
             "it, but does not restore its original function — it will "
