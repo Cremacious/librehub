@@ -274,8 +274,15 @@ class Window(Gtk.Window):
 
         try:
             if new_indices:
+                # Treat every fcode ever assigned (not just the ones we're
+                # keeping) as in-use. A button that was previously managed
+                # but got unchecked still has its old signal wired into the
+                # mouse's onboard profile — we don't reset its hardware here
+                # — so handing that "freed" fcode to a different button
+                # would make two physical buttons emit the same signal.
+                used = set(self.config.managed_buttons.values())
                 new_codes = ratbag.next_free_signals(
-                    used=list(kept.values()), count=len(new_indices))
+                    used=used, count=len(new_indices))
                 for idx, fcode in zip(new_indices, new_codes):
                     ratbag.assign_signal(dev, 0, idx, fcode)
                     kept[idx] = fcode
@@ -299,6 +306,11 @@ class Window(Gtk.Window):
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.NONE,
             text="Mouse set up. The daemon must reload to pick up the change.")
+        dlg.format_secondary_text(
+            "Note: unchecking a button here stops LibreHub from managing "
+            "it, but does not restore its original function — it will "
+            "keep sending its assigned signal (harmless if unbound) until "
+            "you reset it yourself in Piper or ratbagctl.")
         dlg.add_buttons("Restart daemon", Gtk.ResponseType.OK,
                         "I'll restart it myself", Gtk.ResponseType.CANCEL)
         response = dlg.run()
