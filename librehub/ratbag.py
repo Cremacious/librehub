@@ -29,8 +29,15 @@ def _run(args, run):
         raise RatbagError(f"failed to run {' '.join(args)}: {e}") from e
 
 
-def resolve_device(model: str, run=subprocess.run) -> str | None:
+def resolve_device(model: str | None = None, run=subprocess.run) -> str | None:
     res = _run(["ratbagctl", "list"], run)
+    if not model:
+        for line in res.stdout.splitlines():
+            if not line.strip():
+                continue
+            short, _, _desc = line.partition(":")
+            return short.strip()
+        return None
     for line in res.stdout.splitlines():
         if ":" not in line:
             continue
@@ -38,6 +45,14 @@ def resolve_device(model: str, run=subprocess.run) -> str | None:
         if model.lower() in desc.lower():
             return short.strip()
     return None
+
+
+def device_name(dev: str, run=subprocess.run) -> str | None:
+    res = _run(["ratbagctl", dev, "name"], run)
+    if res.returncode != 0:
+        return None
+    name = res.stdout.strip()
+    return name or None
 
 
 _BTN_RE = re.compile(r"Button:\s+(\d+)\s+is mapped to (.+?)\s*$")

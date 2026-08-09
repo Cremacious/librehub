@@ -28,6 +28,41 @@ def test_resolve_device_no_match():
     assert ratbag.resolve_device("G502 HERO", run=fr) is None
 
 
+def test_resolve_device_auto_detects_first_when_no_model():
+    fr = FakeRun(stdout=(
+        "hollering-marmot:    Logitech G502 HERO Gaming Mouse \n"
+        "another-device:    Some Other Mouse\n"
+    ))
+    assert ratbag.resolve_device(None, run=fr) == "hollering-marmot"
+
+
+def test_resolve_device_auto_detect_empty_list_returns_none():
+    fr = FakeRun(stdout="")
+    assert ratbag.resolve_device(None, run=fr) is None
+
+
+def test_resolve_device_auto_detect_empty_string_model():
+    fr = FakeRun(stdout="hollering-marmot:    Logitech G502 HERO Gaming Mouse \n")
+    assert ratbag.resolve_device("", run=fr) == "hollering-marmot"
+
+
+def test_device_name_builds_command_and_returns_stripped_stdout():
+    fr = FakeRun(stdout="  Logitech G502 HERO Gaming Mouse \n")
+    got = ratbag.device_name("hollering-marmot", run=fr)
+    assert fr.calls[-1] == ["ratbagctl", "hollering-marmot", "name"]
+    assert got == "Logitech G502 HERO Gaming Mouse"
+
+
+def test_device_name_empty_stdout_returns_none():
+    fr = FakeRun(stdout="   \n")
+    assert ratbag.device_name("dev0", run=fr) is None
+
+
+def test_device_name_failure_returns_none():
+    fr = FakeRun(stdout="", returncode=1)
+    assert ratbag.device_name("dev0", run=fr) is None
+
+
 def test_parse_buttons():
     info = (
         "Profile 0:\n"

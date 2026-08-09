@@ -436,7 +436,7 @@ class Window(Gtk.Window):
 
     def _on_setup_mouse(self, _btn):
         try:
-            dev = ratbag.resolve_device(ratbag.MODEL_DEFAULT)
+            dev = ratbag.resolve_device()
         except ratbag.RatbagError as e:
             self._error(f"could not detect mouse: {e}")
             return

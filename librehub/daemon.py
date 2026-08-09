@@ -104,7 +104,12 @@ class Daemon:
 
     async def run(self) -> None:
         self.reload_config()
-        dev_path = E.find_signal_device(self.model)
+        model = self.model
+        if not model:
+            dev = ratbag.resolve_device(None)
+            model = ratbag.device_name(dev) if dev else None
+        self.model = model
+        dev_path = E.find_signal_device(model) if model else None
         tasks = [self.poll_focus(), self.watch_config(), self.serve_ipc()]
         if dev_path:
             tasks.append(self.engine.run(dev_path, on_detect=self._on_detect))
@@ -116,8 +121,8 @@ class Daemon:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="librehub-daemon")
-    ap.add_argument("--model", default=ratbag.MODEL_DEFAULT,
-                    help="device model substring to match")
+    ap.add_argument("--model", default=None,
+                    help="device model substring to match; default: auto-detect")
     args = ap.parse_args(argv)
     engine = E.Engine()
     d = Daemon(cfg_path=C.config_path(), engine=engine,
