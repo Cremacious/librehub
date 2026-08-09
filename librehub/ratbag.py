@@ -15,8 +15,6 @@ import subprocess
 
 from . import keys
 
-MODEL_DEFAULT = "G502 HERO"
-
 
 class RatbagError(Exception):
     pass
@@ -34,6 +32,8 @@ def resolve_device(model: str | None = None, run=subprocess.run) -> str | None:
     if not model:
         for line in res.stdout.splitlines():
             if not line.strip():
+                continue
+            if ":" not in line:
                 continue
             short, _, _desc = line.partition(":")
             return short.strip()

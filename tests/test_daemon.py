@@ -1,5 +1,5 @@
 from pathlib import Path
-from librehub import daemon, config as C
+from librehub import daemon, config as C, ratbag
 
 
 class SpyEngine:
@@ -48,3 +48,35 @@ def test_reload_keeps_last_good_on_bad_config(tmp_path: Path):
     d.reload_config()  # should not raise
     d.apply_appid("1374490")
     assert eng.bindings == {"KEY_F13": "m"}
+
+
+def test_resolve_signal_device_survives_ratbag_error(tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    eng = SpyEngine()
+    d = daemon.Daemon(cfg_path=p, engine=eng, appid_fn=lambda: None, model=None)
+
+    def _raise(model):
+        raise ratbag.RatbagError("ratbagctl not found")
+
+    monkeypatch.setattr(daemon.ratbag, "resolve_device", _raise)
+
+    result = d._resolve_signal_device()
+
+    assert result is None
+
+
+def test_resolve_signal_device_returns_found_path(tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    eng = SpyEngine()
+    d = daemon.Daemon(cfg_path=p, engine=eng, appid_fn=lambda: None, model=None)
+
+    monkeypatch.setattr(daemon.ratbag, "resolve_device", lambda model: "dev0")
+    monkeypatch.setattr(daemon.ratbag, "device_name", lambda dev: "Some Mouse")
+    monkeypatch.setattr(daemon.E, "find_signal_device", lambda model: "/dev/input/event9")
+
+    result = d._resolve_signal_device()
+
+    assert result == "/dev/input/event9"
+    assert d.model == "Some Mouse"

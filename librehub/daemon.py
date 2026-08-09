@@ -102,14 +102,26 @@ class Daemon:
         async with server:
             await server.serve_forever()
 
-    async def run(self) -> None:
-        self.reload_config()
+    def _resolve_signal_device(self):
         model = self.model
         if not model:
-            dev = ratbag.resolve_device(None)
-            model = ratbag.device_name(dev) if dev else None
-        self.model = model
-        dev_path = E.find_signal_device(model) if model else None
+            try:
+                dev = ratbag.resolve_device(None)
+                model = ratbag.device_name(dev) if dev else None
+            except ratbag.RatbagError as e:
+                print(f"librehub: mouse auto-detect failed ({e}); "
+                      "remapping disabled until restart", file=sys.stderr)
+                return None
+        if model:
+            self.model = model
+        try:
+            return E.find_signal_device(model) if model else None
+        except OSError:
+            return None
+
+    async def run(self) -> None:
+        self.reload_config()
+        dev_path = self._resolve_signal_device()
         tasks = [self.poll_focus(), self.watch_config(), self.serve_ipc()]
         if dev_path:
             tasks.append(self.engine.run(dev_path, on_detect=self._on_detect))
