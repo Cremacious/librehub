@@ -45,6 +45,7 @@ class Tray:
         win = gui.Window()
         win.connect("destroy", self._on_editor_closed)
         win.show_all()
+        win.present()
         self._editor = win
 
     def _on_editor_closed(self, *_args):

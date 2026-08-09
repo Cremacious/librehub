@@ -126,6 +126,9 @@ class Window(Gtk.Window):
     def __init__(self):
         super().__init__(title="LibreHub")
         self.set_default_size(760, 480)
+        # Float above other windows so the editor can be summoned over a
+        # (borderless) fullscreen game instead of hiding behind it.
+        self.set_keep_above(True)
         self.cfg_path = C.config_path()
         self._editing: str | None = None
         self._config_warning: str | None = None
@@ -559,6 +562,7 @@ def main(argv=None) -> int:
     win = Window()
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
+    win.present()
     Gtk.main()
     return 0
 
