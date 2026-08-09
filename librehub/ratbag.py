@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 import subprocess
 
+from . import keys
+
 MODEL_DEFAULT = "G502 HERO"
 
 
@@ -70,3 +72,40 @@ def set_active_profile(dev: str, profile: int, run=subprocess.run) -> None:
     res = _run(["ratbagctl", dev, "profile", "active", "set", str(profile)], run)
     if res.returncode != 0:
         raise RatbagError(f"setting active profile {profile} failed")
+
+
+def device_info(dev: str, run=subprocess.run) -> str:
+    """Return the stdout of `ratbagctl <dev> info`."""
+    res = _run(["ratbagctl", dev, "info"], run)
+    if res.returncode != 0:
+        raise RatbagError(f"reading info for {dev} failed")
+    return res.stdout
+
+
+def parse_profile_buttons(info_output: str, profile: int) -> dict[int, str]:
+    """Return {button_index: action_text} for the given profile number."""
+    result: dict[int, str] = {}
+    in_profile = False
+    for line in info_output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Profile"):
+            m = re.match(r"Profile\s+(\d+):", stripped)
+            in_profile = bool(m) and int(m.group(1)) == profile
+            continue
+        if not in_profile:
+            continue
+        m = _BTN_RE.search(line)
+        if m:
+            result[int(m.group(1))] = m.group(2).strip()
+    return result
+
+
+def next_free_signals(used, count: int) -> list[str]:
+    """Return the first `count` fcodes from keys.FSIGNALS not present in `used`."""
+    used_set = set(used)
+    free = [code for code in keys.FSIGNALS if code not in used_set]
+    if len(free) < count:
+        raise RatbagError(
+            f"not enough free signals: need {count}, have {len(free)}"
+        )
+    return free[:count]
