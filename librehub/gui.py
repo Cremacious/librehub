@@ -191,7 +191,7 @@ class Window(Gtk.Window):
                 continue
             bindings[fcode] = out
         if bad:
-            self._error(f"invalid key(s): {', '.join(bad)}")
+            self._error(f"invalid key(s): {', '.join(bad)} ({keys.EXAMPLES})")
             return False
         target.bindings = bindings
         return True
@@ -210,7 +210,7 @@ class Window(Gtk.Window):
             try:
                 keys.to_code(text)
             except ValueError:
-                self._error(f"invalid key: {text!r}")
+                self._error(f"'{text}' isn't a recognized key ({keys.EXAMPLES})")
                 return
         self.bind_store[path][1] = text
 

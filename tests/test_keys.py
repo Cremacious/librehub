@@ -22,6 +22,23 @@ def test_explicit_keyname():
     assert keys.to_code("KEY_F13") == ecodes.KEY_F13
 
 
+def test_alias_spacebar():
+    from evdev import ecodes
+    assert keys.to_code("Spacebar") == ecodes.KEY_SPACE
+
+
+def test_function_keys():
+    from evdev import ecodes
+    assert keys.to_code("f1") == ecodes.KEY_F1
+    assert keys.to_code("F5") == ecodes.KEY_F5
+    assert keys.to_code("f24") == ecodes.KEY_F24
+
+
+def test_function_key_out_of_range_raises():
+    with pytest.raises(ValueError):
+        keys.to_code("f25")
+
+
 def test_unknown_raises():
     with pytest.raises(ValueError):
         keys.to_code("nope-not-a-key")
