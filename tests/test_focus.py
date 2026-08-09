@@ -26,3 +26,29 @@ def test_appid_from_environ():
 
 def test_appid_from_environ_absent():
     assert focus.appid_from_environ(b"PATH=/usr/bin\x00") is None
+
+
+def test_running_appids_dedup_first_seen_order():
+    envs = {
+        10: b"SteamAppId=552500\x00",
+        11: b"SteamAppId=1374490\x00",
+        12: b"SteamAppId=552500\x00",
+    }
+    assert focus.running_appids(pids=[10, 11, 12], read_environ=envs.get) == [
+        "552500", "1374490"]
+
+
+def test_running_appids_none_running():
+    envs = {10: b"PATH=/usr/bin\x00", 11: b""}
+    assert focus.running_appids(pids=[10, 11], read_environ=envs.get) == []
+
+
+def test_running_appids_tolerates_read_error():
+    def flaky_read_environ(pid):
+        if pid == 11:
+            raise OSError("no such process")
+        return {10: b"SteamAppId=552500\x00", 12: b"SteamAppId=1374490\x00"}[pid]
+
+    assert focus.running_appids(pids=[10, 11, 12],
+                                 read_environ=flaky_read_environ) == [
+        "552500", "1374490"]

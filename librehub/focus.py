@@ -1,6 +1,7 @@
 """X11 active-window -> Steam AppID detection."""
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 
@@ -34,6 +35,33 @@ def _read_environ(pid: int) -> bytes:
             return fh.read()
     except OSError:
         return b""
+
+
+def _proc_pids() -> list[int]:
+    pids = []
+    try:
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                pids.append(int(name))
+    except OSError:
+        return []
+    return pids
+
+
+def running_appids(pids=None, read_environ=_read_environ) -> list[str]:
+    """Distinct Steam AppIDs across running processes (order of first sight)."""
+    if pids is None:
+        pids = _proc_pids()
+    seen: list[str] = []
+    for pid in pids:
+        try:
+            environ = read_environ(pid)
+        except OSError:
+            continue
+        appid = appid_from_environ(environ)
+        if appid and appid not in seen:
+            seen.append(appid)
+    return seen
 
 
 def current_appid(run=subprocess.run, read_environ=_read_environ) -> str | None:

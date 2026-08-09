@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import gi
 
@@ -12,10 +14,35 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from . import config as C  # noqa: E402
-from . import ipc, keys, ratbag  # noqa: E402
+from . import focus, ipc, keys, ratbag  # noqa: E402
 
 # ratbagctl reports these quoted, e.g. "'button 1'" (see parse_profile_buttons).
 _PRIMARY_BUTTON_ACTIONS = {"'button 1'", "'button 2'", "'button 3'"}
+
+_MANIFEST_NAME_RE = re.compile(r'"name"\s+"([^"]*)"')
+
+
+def _steam_manifest_paths(appid: str) -> list[Path]:
+    home = Path.home()
+    return [
+        home / ".steam" / "debian-installation" / "steamapps"
+        / f"appmanifest_{appid}.acf",
+        home / ".local" / "share" / "Steam" / "steamapps"
+        / f"appmanifest_{appid}.acf",
+    ]
+
+
+def _resolve_game_name(appid: str) -> str:
+    """Best-effort display name for a Steam AppID from local manifests."""
+    for path in _steam_manifest_paths(appid):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        m = _MANIFEST_NAME_RE.search(text)
+        if m:
+            return m.group(1)
+    return f"Game {appid}"
 
 
 def _ipc_request(msg: dict) -> dict | None:
@@ -195,13 +222,59 @@ class Window(Gtk.Window):
     def _on_add_current(self, _btn):
         if not self._flush_bindings():
             return
-        resp = _ipc_request({"cmd": "current_appid"})
-        aid = (resp or {}).get("appid")
-        if not aid:
-            self._error("No Steam game focused right now.")
+        appids = focus.running_appids()
+        if not appids:
+            self._error(
+                "No running Steam game detected. Launch the game (through "
+                "Steam) and try again. Non-Steam games can be added with "
+                "'Add by AppID…'.")
             return
-        self.config.games.setdefault(aid, C.Game(name=f"Game {aid}", bindings={}))
+        if len(appids) == 1:
+            aid = appids[0]
+        else:
+            aid = self._choose_running_game(appids)
+            if aid is None:
+                return
+        self.config.games.setdefault(
+            aid, C.Game(name=_resolve_game_name(aid), bindings={}))
         self._refresh_games()
+        self._select_game_row(aid)
+
+    def _choose_running_game(self, appids: list[str]) -> str | None:
+        """Show a chooser dialog for multiple running Steam games; return
+        the chosen appid, or None if cancelled."""
+        dlg = Gtk.Dialog(title="Choose a running game", transient_for=self,
+                         modal=True)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        content = dlg.get_content_area()
+        radios: dict[str, Gtk.RadioButton] = {}
+        group = None
+        for aid in appids:
+            label = f"{_resolve_game_name(aid)} [{aid}]"
+            rb = Gtk.RadioButton.new_with_label_from_widget(group, label)
+            group = group or rb
+            content.add(rb)
+            radios[aid] = rb
+        dlg.show_all()
+        response = dlg.run()
+        chosen = None
+        if response == Gtk.ResponseType.OK:
+            for aid, rb in radios.items():
+                if rb.get_active():
+                    chosen = aid
+                    break
+        dlg.destroy()
+        return chosen
+
+    def _select_game_row(self, appid: str):
+        """Best-effort: select/highlight the row for appid in the game list."""
+        it = self.game_store.get_iter_first()
+        while it is not None:
+            if self.game_store[it][0] == appid:
+                self.game_view.get_selection().select_iter(it)
+                break
+            it = self.game_store.iter_next(it)
 
     def _on_add_manual(self, _btn):
         if not self._flush_bindings():
