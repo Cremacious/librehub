@@ -1,6 +1,7 @@
 """GTK3 editor for LibreHub per-game mouse bindings."""
 from __future__ import annotations
 
+import os
 import socket
 import sys
 
@@ -10,7 +11,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from . import config as C  # noqa: E402
-from . import ipc, ratbag  # noqa: E402
+from . import ipc, keys  # noqa: E402
 
 
 def _ipc_request(msg: dict) -> dict | None:
@@ -31,11 +32,29 @@ class Window(Gtk.Window):
         super().__init__(title="LibreHub")
         self.set_default_size(760, 480)
         self.cfg_path = C.config_path()
+        self._editing: str | None = None
+        self._config_warning: str | None = None
         try:
             self.config = C.load(self.cfg_path)
-        except C.ConfigError:
+        except C.ConfigError as e:
             self.config = C.default_config()
-        self.current_appid: str | None = None
+            if self.cfg_path.exists():
+                backup = self.cfg_path.with_suffix(self.cfg_path.suffix + ".bak")
+                try:
+                    os.replace(self.cfg_path, backup)
+                    self._config_warning = (
+                        f"Could not read {self.cfg_path}: {e}\n"
+                        f"The unreadable file was backed up to {backup.name}; "
+                        "starting from a fresh default config."
+                    )
+                except OSError as backup_err:
+                    self._config_warning = (
+                        f"Could not read {self.cfg_path}: {e}\n"
+                        f"Also failed to back it up: {backup_err}. "
+                        "Starting from a fresh default config; saving may "
+                        "overwrite the unreadable file."
+                    )
+            # else: no config file yet (first run) — nothing to warn about.
 
         outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.add(outer)
@@ -80,6 +99,11 @@ class Window(Gtk.Window):
 
         self._refresh_games()
         self._refresh_status()
+        if self._config_warning:
+            self.status.set_text(
+                f"config error, backed up to .bak — {self.status.get_text()}")
+            # defer the modal dialog until the window is actually shown
+            self.connect("show", lambda *_a: self._error(self._config_warning))
 
     # --- helpers ---
     def _refresh_games(self):
@@ -102,10 +126,41 @@ class Window(Gtk.Window):
         if it is None:
             return None
         aid = model[it][0]
-        self.current_appid = aid or None
+        self._editing = aid or None
         return self.config.default if not aid else self.config.games.get(aid)
 
+    def _flush_bindings(self) -> bool:
+        """Write the current bind_store rows into the in-memory game object
+        being edited (self._editing, or the default game if None).
+
+        Validates every non-empty output key. If any is invalid, shows an
+        error and returns False without touching the model (so the caller
+        can abort whatever it was about to do). Returns True otherwise.
+        """
+        target = (self.config.default if not self._editing
+                   else self.config.games.get(self._editing))
+        if target is None:
+            return True
+        bad = []
+        bindings: dict[str, str] = {}
+        for row in self.bind_store:
+            fcode, out = row[0], row[1]
+            if not out:
+                continue
+            try:
+                keys.to_code(out)
+            except ValueError:
+                bad.append(out)
+                continue
+            bindings[fcode] = out
+        if bad:
+            self._error(f"invalid key(s): {', '.join(bad)}")
+            return False
+        target.bindings = bindings
+        return True
+
     def _on_game_selected(self, _sel):
+        self._flush_bindings()
         g = self._selected_game()
         self.bind_store.clear()
         if g:
@@ -113,7 +168,14 @@ class Window(Gtk.Window):
                 self.bind_store.append([fcode, out])
 
     def _on_key_edited(self, _renderer, path, new_text):
-        self.bind_store[path][1] = new_text.strip()
+        text = new_text.strip()
+        if text:
+            try:
+                keys.to_code(text)
+            except ValueError:
+                self._error(f"invalid key: {text!r}")
+                return
+        self.bind_store[path][1] = text
 
     def _on_detect_binding(self, _btn):
         resp = _ipc_request({"cmd": "detect"})
@@ -124,6 +186,8 @@ class Window(Gtk.Window):
             self._error("No button detected (is the daemon running?).")
 
     def _on_add_current(self, _btn):
+        if not self._flush_bindings():
+            return
         resp = _ipc_request({"cmd": "current_appid"})
         aid = (resp or {}).get("appid")
         if not aid:
@@ -133,6 +197,8 @@ class Window(Gtk.Window):
         self._refresh_games()
 
     def _on_add_manual(self, _btn):
+        if not self._flush_bindings():
+            return
         dlg = Gtk.Dialog(title="Add by AppID", transient_for=self, modal=True)
         dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OK, Gtk.ResponseType.OK)
@@ -148,9 +214,8 @@ class Window(Gtk.Window):
         dlg.destroy()
 
     def _on_save(self, _btn):
-        g = self._selected_game()
-        if g is not None:
-            g.bindings = {row[0]: row[1] for row in self.bind_store if row[1]}
+        if not self._flush_bindings():
+            return
         try:
             C.save(self.config, self.cfg_path)
             self.status.set_text("saved.")
