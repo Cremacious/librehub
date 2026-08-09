@@ -104,6 +104,9 @@ class Window(Gtk.Window):
         add_manual = Gtk.Button(label="Add by AppID…")
         add_manual.connect("clicked", self._on_add_manual)
         left.pack_start(add_manual, False, False, 0)
+        remove_btn = Gtk.Button(label="Remove selected game")
+        remove_btn.connect("clicked", self._on_remove_game)
+        left.pack_start(remove_btn, False, False, 0)
         setup_mouse_btn = Gtk.Button(label="Set up mouse")
         setup_mouse_btn.connect("clicked", self._on_setup_mouse)
         left.pack_start(setup_mouse_btn, False, False, 0)
@@ -275,6 +278,45 @@ class Window(Gtk.Window):
                 self.game_view.get_selection().select_iter(it)
                 break
             it = self.game_store.iter_next(it)
+
+    def _on_remove_game(self, _btn):
+        model, it = self.game_view.get_selection().get_selected()
+        if it is None or not model[it][0]:
+            self._error("Select a game to remove. The default profile "
+                        "can't be removed.")
+            return
+        aid = model[it][0]
+        game = self.config.games.get(aid)
+        name = game.name if game else aid
+        confirm = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Remove '{name}' [{aid}]?")
+        confirm.format_secondary_text(
+            "This deletes its bindings from LibreHub. (It does not change "
+            "the mouse's onboard button signals.)")
+        response = confirm.run()
+        confirm.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        self.config.games.pop(aid, None)
+        # We're deleting this game — drop any in-progress edits for it instead
+        # of flushing them back, and stop editing it.
+        self._editing = None
+        self.bind_store.clear()
+        try:
+            C.save(self.config, self.cfg_path)
+        except OSError as e:
+            self._error(f"save failed: {e}")
+            return
+        # Refresh without letting the selection-changed handler flush the
+        # (now empty) bind table into the default profile and wipe it.
+        selection = self.game_view.get_selection()
+        selection.handler_block_by_func(self._on_game_selected)
+        self._refresh_games()
+        selection.handler_unblock_by_func(self._on_game_selected)
+        self.status.set_text(f"removed {name}.")
 
     def _on_add_manual(self, _btn):
         if not self._flush_bindings():
