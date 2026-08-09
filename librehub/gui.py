@@ -425,6 +425,7 @@ class Window(Gtk.Window):
         self.config.games.pop(aid, None)
         self._editing = None
         self.bind_store.clear()
+        self.profile_label.set_text("Select a game or the default profile")
         if not self._persist():
             return
         selection = self.game_view.get_selection()
