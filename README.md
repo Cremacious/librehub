@@ -51,7 +51,32 @@ Logitech G HUB does not run usefully on Linux. Its signature convenience — *di
 
 ### One-time mouse setup
 
-LibreHub's Layer 1 (see [How It Works](#how-it-works)) requires each mouse button you want to use to emit a unique signal, `KEY_F13`–`KEY_F24`, stored in the mouse's always-on onboard profile. **This is not yet automated in the GUI** — you configure it once via `ratbagctl` before using LibreHub:
+LibreHub's Layer 1 (see [How It Works](#how-it-works)) requires each mouse button you want to use to emit a unique signal, `KEY_F13`–`KEY_F24`, stored in the mouse's always-on onboard profile. **LibreHub now provides a guided in-app setup dialog** that automates this for you:
+
+1. **Launch the GUI:**
+   ```bash
+   librehub
+   ```
+
+2. **Click "Set up mouse"** in the left pane.
+   - LibreHub scans your mouse and shows a dialog listing each remappable button with its current action
+   - Check the boxes next to the buttons you want to manage (LibreHub will exclude primary clicks: buttons 1, 2, 3)
+
+3. **Click OK** to confirm.
+   - LibreHub assigns each checked button a unique F-signal (`KEY_F13`–`KEY_F24`), programs them into your mouse's profile 0, and activates that profile
+   - An info dialog appears confirming the setup is complete
+
+4. **Restart the daemon** (if prompted).
+   - Click "Restart daemon" in the dialog, or run:
+     ```bash
+     systemctl --user restart librehub-daemon
+     ```
+
+After this one-time setup, LibreHub's **"Add binding (press a mouse button)"** flow will detect those buttons.
+
+#### Advanced: manual setup via ratbagctl
+
+If you prefer to configure buttons manually or your mouse is not fully supported by the GUI, you can use `ratbagctl` directly:
 
 1. **Find your device's short-name:**
    ```bash
@@ -75,10 +100,6 @@ LibreHub's Layer 1 (see [How It Works](#how-it-works)) requires each mouse butto
    ```bash
    ratbagctl "<device>" profile active set 0
    ```
-
-After this one-time setup, LibreHub's **"Add binding (press a mouse button)"** flow will detect those buttons.
-
-> This manual step is temporary — guided in-app setup (auto-assigning F13–F24 for you via `ratbagd`) is on the [roadmap](#roadmap).
 
 ### Start the Daemon
 
@@ -157,19 +178,20 @@ The `librehub-daemon`:
 
 ### Known limitations
 
-- **Manual signal setup required:** buttons must be pre-programmed to `KEY_F13`–`KEY_F24` via the [one-time mouse setup](#one-time-mouse-setup) above; guided setup is not yet built into the GUI
 - **No hot-plug rediscovery:** the daemon discovers the mouse at startup only — if you plug/unplug the mouse during a session, restart the daemon with `systemctl --user restart librehub-daemon`
 
 ---
 
 ## Roadmap
 
-- **v2:** Guided in-app first-run mouse setup (auto-assign F13–F24 via `ratbagd`)
 - **v2:** Mouse hot-plug rediscovery
 - **v2:** Macros and modifier combinations (Ctrl+Q, multi-key sequences)
 - **v2:** Non-Steam game matching (by window title, process name)
 - **v3:** Universal mouse engine (support any mouse via full evdev remapping)
 - **v3:** Wayland support
+
+**Recently shipped:**
+- Guided in-app mouse setup ("Set up mouse" dialog auto-assigns F13–F24 via `ratbagd`)
 
 ---
 
