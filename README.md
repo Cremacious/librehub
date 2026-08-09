@@ -49,32 +49,50 @@ Logitech G HUB does not run usefully on Linux. Its signature convenience — *di
 
 ## Usage
 
-### Add a Game & Configure Bindings
+### Start the Daemon
 
-1. **Open LibreHub:**
+The daemon must be running for button detection and auto-switching to work:
+
+```bash
+# Already running as a systemd --user service from install.sh
+# If needed, start it manually:
+librehub-daemon
+```
+
+### Configure a Game
+
+1. **Launch the GUI:**
    ```bash
    librehub
    ```
+   The window shows a game list on the left and a bindings table on the right.
 
-2. **Add a game** (click the Add button):
-   - **Detect running game:** If you're already playing, LibreHub will detect the Steam AppID
-   - **Enter AppID manually:** Find it at `steamdb.info` or from Steam's URL
-   - The game will be added to your profiles list
+2. **Add the game:**
+   - **Detect:** While the Steam game is running and focused, click **"Add game I'm playing now"** → the daemon detects the focused game and adds it
+   - **Manual:** Click **"Add by AppID…"**, enter the Steam AppID (find it at `steamdb.info`), and click OK
+   - The game now appears in the left list
 
-3. **Configure button bindings:**
-   - Select the game's profile
-   - Click "Identify button" and press a mouse button → LibreHub shows which button you pressed
-   - Click "Set key" and press the keyboard key you want it to send
-   - Add more button-to-key mappings as needed
-   - Click **Save**
+3. **Select the game** in the left list to edit its bindings
+
+4. **Add a binding:**
+   - Click **"Add binding (press a mouse button)"**
+   - Press the physical mouse button you want to bind
+   - A new row appears showing the button signal (e.g., `KEY_F13`)
+
+5. **Set the output key:**
+   - Click the **"Key"** cell in that row
+   - Type the key you want it to send (e.g., `m`, `4`, `space`, `q`)
+   - Press Enter to confirm
+
+6. **Repeat** for more buttons, then click **"Save"** to write the config
 
 ### Auto-Switching
 
-Once configured, LibreHub will:
+Once a game is configured, LibreHub's daemon will:
 - Monitor which game has keyboard focus (via Steam AppID)
-- Automatically switch to that game's binding set when it launches
-- Fall back to the `default` set when no mapped game is active
-- Log unmapped games so you can discover and add them later
+- Automatically activate that game's bindings when it launches
+- Fall back to the `default` bindings when no mapped game is focused
+- Report unmapped games in systemd logs so you can discover and add them
 
 ---
 
