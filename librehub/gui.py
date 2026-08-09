@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import sys
 
 import gi
@@ -11,7 +12,10 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from . import config as C  # noqa: E402
-from . import ipc, keys  # noqa: E402
+from . import ipc, keys, ratbag  # noqa: E402
+
+# ratbagctl reports these quoted, e.g. "'button 1'" (see parse_profile_buttons).
+_PRIMARY_BUTTON_ACTIONS = {"'button 1'", "'button 2'", "'button 3'"}
 
 
 def _ipc_request(msg: dict) -> dict | None:
@@ -73,6 +77,9 @@ class Window(Gtk.Window):
         add_manual = Gtk.Button(label="Add by AppID…")
         add_manual.connect("clicked", self._on_add_manual)
         left.pack_start(add_manual, False, False, 0)
+        setup_mouse_btn = Gtk.Button(label="Set up mouse")
+        setup_mouse_btn.connect("clicked", self._on_setup_mouse)
+        left.pack_start(setup_mouse_btn, False, False, 0)
         outer.pack_start(left, False, False, 0)
 
         # right: bindings table
@@ -212,6 +219,111 @@ class Window(Gtk.Window):
                 self.config.games.setdefault(aid, C.Game(name=f"Game {aid}", bindings={}))
                 self._refresh_games()
         dlg.destroy()
+
+    def _on_setup_mouse(self, _btn):
+        try:
+            dev = ratbag.resolve_device(ratbag.MODEL_DEFAULT)
+        except ratbag.RatbagError as e:
+            self._error(f"could not detect mouse: {e}")
+            return
+        if not dev:
+            self._error("No supported mouse found.")
+            return
+
+        try:
+            info = ratbag.device_info(dev)
+        except ratbag.RatbagError as e:
+            self._error(f"could not read mouse info: {e}")
+            return
+
+        buttons = ratbag.parse_profile_buttons(info, 0)
+        remappable = {idx: action for idx, action in buttons.items()
+                      if action not in _PRIMARY_BUTTON_ACTIONS}
+        if not remappable:
+            self._error("No remappable buttons found on this mouse.")
+            return
+
+        dlg = Gtk.Dialog(title="Set up mouse", transient_for=self, modal=True)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        content = dlg.get_content_area()
+        checks: dict[int, Gtk.CheckButton] = {}
+        for idx in sorted(remappable):
+            cb = Gtk.CheckButton(
+                label=f"Button {idx} — currently {remappable[idx]}")
+            cb.set_active(str(idx) in self.config.managed_buttons)
+            content.add(cb)
+            checks[idx] = cb
+        dlg.show_all()
+        response = dlg.run()
+        checked = ([idx for idx, cb in checks.items() if cb.get_active()]
+                  if response == Gtk.ResponseType.OK else None)
+        dlg.destroy()
+        if checked is None:
+            return
+
+        existing = self.config.managed_buttons
+        kept: dict[int, str] = {}
+        new_indices: list[int] = []
+        for idx in checked:
+            key = str(idx)
+            if key in existing:
+                kept[idx] = existing[key]
+            else:
+                new_indices.append(idx)
+
+        try:
+            if new_indices:
+                new_codes = ratbag.next_free_signals(
+                    used=list(kept.values()), count=len(new_indices))
+                for idx, fcode in zip(new_indices, new_codes):
+                    ratbag.assign_signal(dev, 0, idx, fcode)
+                    kept[idx] = fcode
+            ratbag.set_active_profile(dev, 0)
+        except ratbag.RatbagError as e:
+            self._error(f"mouse setup failed: {e}")
+            return
+
+        self.config.managed_buttons = {str(idx): fcode for idx, fcode in kept.items()}
+        try:
+            C.save(self.config, self.cfg_path)
+        except OSError as e:
+            self._error(f"mouse configured, but saving config failed: {e}")
+            return
+
+        self._prompt_restart_daemon()
+
+    def _prompt_restart_daemon(self):
+        dlg = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Mouse set up. The daemon must reload to pick up the change.")
+        dlg.add_buttons("Restart daemon", Gtk.ResponseType.OK,
+                        "I'll restart it myself", Gtk.ResponseType.CANCEL)
+        response = dlg.run()
+        dlg.destroy()
+        if response == Gtk.ResponseType.OK:
+            self._restart_daemon()
+
+    def _restart_daemon(self):
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "restart", "librehub-daemon"],
+                capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            self._error(f"could not restart daemon: {e}")
+            return
+        if result.returncode == 0:
+            info = Gtk.MessageDialog(
+                transient_for=self, modal=True,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.OK, text="Daemon restarted.")
+            info.run()
+            info.destroy()
+        else:
+            detail = result.stderr.strip() or f"exit code {result.returncode}"
+            self._error(f"daemon restart failed: {detail}")
 
     def _on_save(self, _btn):
         if not self._flush_bindings():
