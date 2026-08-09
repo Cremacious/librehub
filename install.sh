@@ -25,7 +25,7 @@ fi
 
 # --- 2. Console-script wrappers (run from source, use system packages) -------
 mkdir -p "$BIN"
-for entry in "gui:librehub" "daemon:librehub-daemon"; do
+for entry in "gui:librehub" "daemon:librehub-daemon" "tray:librehub-tray"; do
   mod="${entry%%:*}"; name="${entry##*:}"
   cat > "$BIN/$name" <<EOF
 #!/bin/sh
@@ -38,12 +38,17 @@ exec python3 -m librehub.$mod "\$@"
 EOF
   chmod +x "$BIN/$name"
 done
-echo "Installed: $BIN/librehub, $BIN/librehub-daemon"
+echo "Installed wrappers in $BIN: librehub, librehub-daemon, librehub-tray"
 
 # --- 3. Desktop entry (absolute Exec so it works regardless of PATH) ---------
 mkdir -p "$HOME/.local/share/applications"
 sed "s|^Exec=librehub\$|Exec=$BIN/librehub|" packaging/librehub.desktop \
   > "$HOME/.local/share/applications/librehub.desktop"
+
+# --- 3b. Tray autostart entry (runs in background, no taskbar window) --------
+mkdir -p "$HOME/.config/autostart"
+sed "s|^Exec=librehub-tray\$|Exec=$BIN/librehub-tray|" packaging/librehub-tray.desktop \
+  > "$HOME/.config/autostart/librehub-tray.desktop"
 
 # --- 4. systemd --user service ----------------------------------------------
 mkdir -p "$HOME/.config/systemd/user"

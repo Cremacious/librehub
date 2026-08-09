@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=LibreHub Tray
+Comment=LibreHub system tray indicator
+Exec=librehub-tray
+Terminal=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
