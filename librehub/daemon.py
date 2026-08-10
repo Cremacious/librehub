@@ -21,6 +21,8 @@ class Daemon:
         self.model = model
         self.config = C.default_config()
         self.active_appid: str | None = None
+        self.signal_dev: str | None = None
+        self.wayland = False
         self._detect_future: asyncio.Future | None = None
 
     def reload_config(self) -> None:
@@ -35,6 +37,33 @@ class Daemon:
         self.active_appid = appid
         self.engine.set_bindings(selection.active_bindings(self.config, appid))
 
+    def _note_wayland(self) -> None:
+        """Detect a Wayland session, latching once true.
+
+        Must NOT be evaluated only once at startup: as a systemd --user
+        service the daemon can start before the compositor has created its
+        wayland-* socket (and it never inherits WAYLAND_DISPLAY), so a
+        boot-time check races and would wrongly cache False for the whole
+        session. Re-checking until true is cheap and self-healing.
+        """
+        if not self.wayland and focus.is_wayland():
+            self.wayland = True
+            print("librehub: Wayland session — per-game switching uses the "
+                  "running-game fallback (one configured game at a time)",
+                  file=sys.stderr)
+
+    def _detect_appid(self) -> str | None:
+        """Which game is active: precise X11 focus, else Wayland fallback."""
+        appid = self.appid_fn()
+        if appid is not None:
+            return appid
+        # Wayland has no unprivileged focused-window query — if exactly one
+        # configured game is running, assume that's the one being played.
+        self._note_wayland()
+        if self.wayland:
+            return focus.single_running_known_appid(self.config.games)
+        return None
+
     # --- detect mode (for GUI "press a button to identify") ---
     def _on_detect(self, code_name: str) -> bool:
         if self._detect_future is not None and not self._detect_future.done():
@@ -47,7 +76,7 @@ class Daemon:
     async def poll_focus(self, interval: float = 0.5) -> None:
         last = object()
         while True:
-            appid = self.appid_fn()
+            appid = self._detect_appid()
             if appid != last:
                 self.apply_appid(appid)
                 last = appid
@@ -74,9 +103,10 @@ class Daemon:
             cmd = msg.get("cmd")
             if cmd == "status":
                 resp = {"daemon": True, "device": self.model,
-                        "active_appid": self.active_appid}
+                        "active_appid": self.active_appid,
+                        "remapping": self.signal_dev is not None}
             elif cmd == "current_appid":
-                resp = {"appid": self.appid_fn()}
+                resp = {"appid": self._detect_appid()}
             elif cmd == "detect":
                 self._detect_future = asyncio.get_running_loop().create_future()
                 try:
@@ -121,7 +151,9 @@ class Daemon:
 
     async def run(self) -> None:
         self.reload_config()
+        self._note_wayland()  # may still be too early at boot — re-checked live
         dev_path = self._resolve_signal_device()
+        self.signal_dev = dev_path
         tasks = [self.poll_focus(), self.watch_config(), self.serve_ipc()]
         if dev_path:
             tasks.append(self.engine.run(dev_path, on_detect=self._on_detect))

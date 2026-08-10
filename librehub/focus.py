@@ -1,6 +1,14 @@
-"""X11 active-window -> Steam AppID detection."""
+"""Active-window -> Steam AppID detection.
+
+On X11 this reads the focused window (``xprop``) and maps it to a Steam
+AppID. Wayland has no equivalent "which window is focused" query for
+unprivileged clients, so there we fall back to the running-process signal
+(``/proc/<pid>/environ``), which is display-server agnostic: if exactly one
+*configured* game is running, we assume that's the one being played.
+"""
 from __future__ import annotations
 
+import glob
 import os
 import re
 import subprocess
@@ -83,3 +91,35 @@ def current_appid(run=subprocess.run, read_environ=_read_environ) -> str | None:
     if pid is None:
         return None
     return appid_from_environ(read_environ(pid))
+
+
+def is_wayland(environ=None, runtime_dir=None) -> bool:
+    """Whether the session is running under a Wayland compositor.
+
+    Robust inside a systemd --user service, which does NOT inherit
+    XDG_SESSION_TYPE/WAYLAND_DISPLAY: we also look for a ``wayland-*`` socket
+    in XDG_RUNTIME_DIR, which is present whenever a Wayland compositor is up.
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return True
+    if environ.get("WAYLAND_DISPLAY"):
+        return True
+    rd = runtime_dir or environ.get("XDG_RUNTIME_DIR")
+    if rd:
+        return any(glob.glob(os.path.join(rd, "wayland-*")))
+    return False
+
+
+def single_running_known_appid(known_appids, running=None) -> str | None:
+    """The one running AppID that is also configured, else None.
+
+    Returns None when zero or more than one configured game is running, so an
+    ambiguous situation falls back to the default profile rather than guessing.
+    """
+    known = set(known_appids)
+    if not known:
+        return None
+    running = running_appids() if running is None else running
+    matches = [a for a in running if a in known]
+    return matches[0] if len(matches) == 1 else None

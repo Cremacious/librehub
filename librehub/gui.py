@@ -6,15 +6,23 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from . import config as C  # noqa: E402
-from . import focus, ipc, keys, ratbag  # noqa: E402
+from . import focus, ipc, keys, preflight, ratbag  # noqa: E402
+
+_STATUS_ICON = {
+    preflight.Status.OK: "✅",
+    preflight.Status.WARN: "⚠️",
+    preflight.Status.FAIL: "❌",
+}
 
 # ratbagctl reports these quoted, e.g. "'button 1'" (see parse_profile_buttons).
 _PRIMARY_BUTTON_ACTIONS = {"'button 1'", "'button 2'", "'button 3'"}
@@ -86,14 +94,48 @@ def pretty_key(name: str) -> str:
     return name.upper() if len(name) == 1 else name.capitalize()
 
 
-def _steam_manifest_paths(appid: str) -> list[Path]:
+_LIBRARY_PATH_RE = re.compile(r'"path"\s+"([^"]+)"')
+
+
+def _steam_roots() -> list[Path]:
     home = Path.home()
     return [
-        home / ".steam" / "debian-installation" / "steamapps"
-        / f"appmanifest_{appid}.acf",
-        home / ".local" / "share" / "Steam" / "steamapps"
-        / f"appmanifest_{appid}.acf",
+        home / ".steam" / "steam",
+        home / ".steam" / "root",
+        home / ".steam" / "debian-installation",
+        home / ".local" / "share" / "Steam",
     ]
+
+
+def parse_library_paths(vdf_text: str) -> list[str]:
+    """Extract Steam library base paths from a libraryfolders.vdf body."""
+    return _LIBRARY_PATH_RE.findall(vdf_text)
+
+
+def _steamapps_dirs() -> list[Path]:
+    """Every steamapps dir Steam knows about, incl. extra library folders."""
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(sa: Path):
+        if sa not in seen:
+            seen.add(sa)
+            dirs.append(sa)
+
+    for root in _steam_roots():
+        sa = root / "steamapps"
+        add(sa)
+        try:
+            text = (sa / "libraryfolders.vdf").read_text(errors="replace")
+        except OSError:
+            continue
+        for base in parse_library_paths(text):
+            add(Path(base) / "steamapps")
+    return dirs
+
+
+def _steam_manifest_paths(appid: str) -> list[Path]:
+    return [d / f"appmanifest_{appid}.acf" for d in _steamapps_dirs()]
 
 
 def _resolve_game_name(appid: str) -> str:
@@ -109,10 +151,10 @@ def _resolve_game_name(appid: str) -> str:
     return f"Game {appid}"
 
 
-def _ipc_request(msg: dict) -> dict | None:
+def _ipc_request(msg: dict, timeout: float = 11) -> dict | None:
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(11)
+        s.settimeout(timeout)
         s.connect(ipc.socket_path())
         s.sendall(ipc.encode(msg))
         data = s.makefile("rb").readline()
@@ -130,6 +172,7 @@ class Window(Gtk.Window):
         # (borderless) fullscreen game instead of hiding behind it.
         self.set_keep_above(True)
         self.cfg_path = C.config_path()
+        self._first_run = not self.cfg_path.exists()
         self._editing: str | None = None
         self._config_warning: str | None = None
         try:
@@ -171,12 +214,18 @@ class Window(Gtk.Window):
         add_manual = Gtk.Button(label="Add by AppID…")
         add_manual.connect("clicked", self._on_add_manual)
         left.pack_start(add_manual, False, False, 0)
+        rename_game_btn = Gtk.Button(label="Rename selected game")
+        rename_game_btn.connect("clicked", self._on_rename_game)
+        left.pack_start(rename_game_btn, False, False, 0)
         remove_game_btn = Gtk.Button(label="Remove selected game")
         remove_game_btn.connect("clicked", self._on_remove_game)
         left.pack_start(remove_game_btn, False, False, 0)
         setup_mouse_btn = Gtk.Button(label="Set up mouse")
         setup_mouse_btn.connect("clicked", self._on_setup_mouse)
         left.pack_start(setup_mouse_btn, False, False, 0)
+        health_btn = Gtk.Button(label="Setup / Health check")
+        health_btn.connect("clicked", lambda _b: self._open_setup_dialog())
+        left.pack_start(health_btn, False, False, 0)
         outer.pack_start(left, False, False, 0)
 
         # right: bindings for the selected profile
@@ -205,6 +254,12 @@ class Window(Gtk.Window):
 
         self._refresh_games()
         self._refresh_status()
+        # Re-poll status so a daemon that comes up (or goes down) later is
+        # reflected without reopening the window — the one-shot check at launch
+        # used to latch onto a stale "not running" during daemon startup.
+        GLib.timeout_add_seconds(2, self._poll_status)
+        # Guide the user through anything that still needs doing.
+        GLib.idle_add(self._maybe_autoshow_setup)
         if self._config_warning:
             self.status.set_text(
                 f"config error, backed up to .bak — {self.status.get_text()}")
@@ -218,13 +273,33 @@ class Window(Gtk.Window):
             self.game_store.append([aid, f"{g.name} [{aid}]"])
 
     def _refresh_status(self):
-        st = _ipc_request({"cmd": "status"})
+        st = _ipc_request({"cmd": "status"}, timeout=1.5)
         if st and st.get("daemon"):
-            self.status.set_text(
-                f"daemon: running · device: {st.get('device')} · "
-                f"active: {st.get('active_appid') or 'default'}")
+            if st.get("remapping"):
+                self.status.set_text(
+                    f"daemon: running · device: {st.get('device')} · "
+                    f"active: {st.get('active_appid') or 'default'}")
+            else:
+                self.status.set_text(
+                    "daemon: running, but remapping is inactive — "
+                    "open Setup / Health check")
         else:
-            self.status.set_text("daemon: not running")
+            self.status.set_text(
+                "daemon: not running — open Setup / Health check")
+
+    def _poll_status(self) -> bool:
+        self._refresh_status()
+        return True  # keep the GLib timer alive
+
+    def _maybe_autoshow_setup(self) -> bool:
+        checks = preflight.run_all(self.config.managed_buttons)
+        _surface = {preflight.FIX_RELOGIN, preflight.FIX_RESTART_DAEMON}
+        actionable = any(
+            c.status is preflight.Status.FAIL or c.fix in _surface
+            for c in checks)
+        if self._first_run or actionable:
+            self._open_setup_dialog(checks=checks)
+        return False  # run once
 
     def _current_profile(self) -> C.Game | None:
         """The Game object for the current game-list selection (the default
@@ -276,20 +351,42 @@ class Window(Gtk.Window):
             self.status.set_text(f"bound that button to {pretty_key(name)}.")
 
     def _detect_button(self) -> str | None:
+        # The daemon blocks up to ~10s waiting for a button press, so the IPC
+        # call runs in a worker thread — otherwise it would freeze the main
+        # loop and the "press now" popup would never paint.
         dlg = Gtk.MessageDialog(
             transient_for=self, modal=True,
-            message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.NONE,
-            text="Press the mouse button you want to bind…")
-        dlg.show_all()
-        while Gtk.events_pending():
-            Gtk.main_iteration()
-        resp = _ipc_request({"cmd": "detect"})
+            message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.CANCEL,
+            text="Press a mouse button now")
+        dlg.format_secondary_text(
+            "Press the physical mouse button you want to bind. "
+            "Waiting up to 10 seconds…")
+        state = {"alive": True, "resp": None}
+
+        def work():
+            resp = _ipc_request({"cmd": "detect"})
+            GLib.idle_add(on_result, resp)
+
+        def on_result(resp):
+            if not state["alive"]:
+                return False
+            state["resp"] = resp
+            dlg.response(Gtk.ResponseType.OK)  # button detected — close popup
+            return False
+
+        threading.Thread(target=work, daemon=True).start()
+        response = dlg.run()
+        state["alive"] = False
         dlg.destroy()
-        fcode = (resp or {}).get("fcode")
+        if response != Gtk.ResponseType.OK:
+            return None  # user cancelled
+        fcode = (state["resp"] or {}).get("fcode")
         if not fcode:
             self._error(
-                "No button detected. Make sure the daemon is running and that "
-                "you've run 'Set up mouse' to assign the buttons first.")
+                "No button detected within the time limit. Make sure the "
+                "daemon is running (see Setup / Health check) and that you've "
+                "run 'Set up mouse' to assign the buttons first, then try "
+                "again.")
             return None
         return fcode
 
@@ -403,6 +500,38 @@ class Window(Gtk.Window):
                     self._refresh_games()
                     self._select_game_row(aid)
         dlg.destroy()
+
+    def _on_rename_game(self, _btn):
+        model, it = self.game_view.get_selection().get_selected()
+        if it is None or not model[it][0]:
+            self._error("Select a game to rename. The default profile "
+                        "can't be renamed.")
+            return
+        aid = model[it][0]
+        game = self.config.games.get(aid)
+        if game is None:
+            return
+        dlg = Gtk.Dialog(title="Rename game", transient_for=self, modal=True)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        content = dlg.get_content_area()
+        content.add(Gtk.Label(label=f"New name for AppID {aid}:"))
+        entry = Gtk.Entry()
+        entry.set_text(game.name)
+        entry.set_activates_default(True)  # Enter confirms
+        content.add(entry)
+        dlg.show_all()
+        confirmed = dlg.run() == Gtk.ResponseType.OK
+        new_name = entry.get_text().strip()
+        dlg.destroy()
+        if not confirmed or not new_name or new_name == game.name:
+            return
+        game.name = new_name
+        if self._persist():
+            self._refresh_games()
+            self._select_game_row(aid)
+            self.status.set_text(f"renamed to {new_name}.")
 
     def _on_remove_game(self, _btn):
         model, it = self.game_view.get_selection().get_selected()
@@ -550,10 +679,163 @@ class Window(Gtk.Window):
             detail = result.stderr.strip() or f"exit code {result.returncode}"
             self._error(f"daemon restart failed: {detail}")
 
-    def _error(self, text: str):
-        dlg = Gtk.MessageDialog(transient_for=self, modal=True,
-                                message_type=Gtk.MessageType.ERROR,
-                                buttons=Gtk.ButtonsType.OK, text=text)
+    def _error(self, text: str, parent=None):
+        self._message(text, ok=False, parent=parent)
+
+    def _message(self, text: str, ok: bool = True, parent=None):
+        dlg = Gtk.MessageDialog(
+            transient_for=parent or self, modal=True,
+            message_type=Gtk.MessageType.INFO if ok else Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK, text=text)
+        dlg.run()
+        dlg.destroy()
+
+    # --- first-run / health-check dialog ---
+    def _open_setup_dialog(self, checks=None):
+        dlg = Gtk.Dialog(title="LibreHub setup / health check",
+                         transient_for=self, modal=True)
+        dlg.set_default_size(600, 440)
+        content = dlg.get_content_area()
+        content.set_spacing(10)
+        content.set_border_width(12)
+
+        heading = Gtk.Label()
+        heading.set_markup("<b>System check</b>  —  everything LibreHub needs "
+                           "to remap your mouse")
+        heading.set_xalign(0)
+        heading.set_line_wrap(True)
+        content.add(heading)
+
+        list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        content.add(list_box)
+
+        summary = Gtk.Label()
+        summary.set_xalign(0)
+        summary.set_line_wrap(True)
+        content.add(summary)
+
+        btn_setup = Gtk.Button(label="Run system setup (asks for password)")
+        btn_daemon = Gtk.Button(label="Start daemon")
+        btn_restart = Gtk.Button(label="Restart daemon")
+        btn_mouse = Gtk.Button(label="Set up mouse")
+        btn_recheck = Gtk.Button(label="Re-check")
+        action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        for b in (btn_setup, btn_daemon, btn_restart, btn_mouse):
+            action_row.pack_start(b, False, False, 0)
+        action_row.pack_end(btn_recheck, False, False, 0)
+        content.add(action_row)
+        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+
+        action_btns = (btn_setup, btn_daemon, btn_restart, btn_mouse,
+                       btn_recheck)
+        # Guards against a worker thread's completion callback touching the
+        # dialog after the user has closed it.
+        state = {"alive": True}
+        dlg.connect("destroy", lambda *_a: state.__setitem__("alive", False))
+
+        def render(checks):
+            for child in list_box.get_children():
+                list_box.remove(child)
+            needs = {c.fix for c in checks if not c.ok}
+            for c in checks:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                icon = Gtk.Label(label=_STATUS_ICON[c.status])
+                icon.set_valign(Gtk.Align.START)
+                row.pack_start(icon, False, False, 0)
+                lbl = Gtk.Label()
+                lbl.set_xalign(0)
+                lbl.set_line_wrap(True)
+                text = (f"<b>{GLib.markup_escape_text(c.title)}</b> — "
+                        f"{GLib.markup_escape_text(c.detail)}")
+                if not c.ok and c.remedy:
+                    text += (f"\n<small>{GLib.markup_escape_text(c.remedy)}"
+                             "</small>")
+                lbl.set_markup(text)
+                row.pack_start(lbl, True, True, 0)
+                list_box.pack_start(row, False, False, 0)
+            btn_setup.set_visible(preflight.FIX_PRIVILEGED in needs)
+            btn_daemon.set_visible(preflight.FIX_START_DAEMON in needs)
+            btn_restart.set_visible(preflight.FIX_RESTART_DAEMON in needs)
+            btn_mouse.set_visible(preflight.FIX_SETUP_MOUSE in needs)
+            if all(c.ok for c in checks):
+                summary.set_markup("<b>All good — LibreHub is ready.</b>")
+            elif preflight.FIX_RELOGIN in needs:
+                summary.set_markup(
+                    "<b>Almost there:</b> log out and back in (or reboot) to "
+                    "activate your new group membership, then click Re-check.")
+            else:
+                summary.set_text("")
+            list_box.show_all()
+
+        def recheck():
+            render(preflight.run_all(self.config.managed_buttons))
+
+        def set_busy(msg):
+            for b in action_btns:
+                b.set_sensitive(False)
+            summary.set_markup(f"<i>{GLib.markup_escape_text(msg)}</i>")
+
+        def clear_busy():
+            for b in action_btns:
+                b.set_sensitive(True)
+
+        def run_async(fn, busy_msg, on_done):
+            set_busy(busy_msg)
+
+            def work():
+                ok, msg = fn()
+                GLib.idle_add(finish, ok, msg)
+
+            def finish(ok, msg):
+                if not state["alive"]:  # dialog closed mid-run; don't touch it
+                    return False
+                clear_busy()
+                on_done(ok, msg)
+                return False
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def on_setup(_b):
+            def done(ok, msg):
+                recheck()
+                self._message(msg, ok=ok, parent=dlg)
+            run_async(preflight.run_privileged_setup,
+                      "Running system setup — approve the password prompt…",
+                      done)
+
+        def on_daemon(_b):
+            def done(ok, msg):
+                self._refresh_status()
+                recheck()
+                if not ok:
+                    self._error(msg, parent=dlg)
+            run_async(preflight.start_daemon, "Starting daemon…", done)
+
+        def on_restart(_b):
+            def done(ok, msg):
+                self._refresh_status()
+                recheck()
+                if not ok:
+                    self._error(msg, parent=dlg)
+            run_async(preflight.restart_daemon, "Restarting daemon…", done)
+
+        def on_mouse(_b):
+            dlg.hide()  # its own dialogs are transient to the main window
+            self._on_setup_mouse(None)
+            dlg.show()
+            self._refresh_status()
+            recheck()
+
+        btn_setup.connect("clicked", on_setup)
+        btn_daemon.connect("clicked", on_daemon)
+        btn_restart.connect("clicked", on_restart)
+        btn_mouse.connect("clicked", on_mouse)
+        btn_recheck.connect("clicked", lambda _b: recheck())
+
+        initial = (checks if checks is not None
+                   else preflight.run_all(self.config.managed_buttons))
+        dlg.show_all()
+        render(initial)  # after show_all so per-button visibility sticks
         dlg.run()
         dlg.destroy()
 

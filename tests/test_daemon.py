@@ -1,5 +1,5 @@
 from pathlib import Path
-from librehub import daemon, config as C, ratbag
+from librehub import daemon, config as C, focus, ratbag
 
 
 class SpyEngine:
@@ -48,6 +48,62 @@ def test_reload_keeps_last_good_on_bad_config(tmp_path: Path):
     d.reload_config()  # should not raise
     d.apply_appid("1374490")
     assert eng.bindings == {"KEY_F13": "m"}
+
+
+def test_detect_appid_prefers_x11_focus(tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    d = daemon.Daemon(cfg_path=p, engine=SpyEngine(),
+                      appid_fn=lambda: "1374490", model="X")
+    d.reload_config()
+    # Focus wins even on Wayland when it yields a result (returns before the
+    # fallback), so is_wayland must not even be consulted here.
+    monkeypatch.setattr(daemon.focus, "is_wayland",
+                        lambda: (_ for _ in ()).throw(AssertionError("called")))
+    assert d._detect_appid() == "1374490"
+
+
+def test_detect_appid_wayland_fallback_to_single_running_game(
+        tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    d = daemon.Daemon(cfg_path=p, engine=SpyEngine(),
+                      appid_fn=lambda: None, model="X")
+    d.reload_config()
+    monkeypatch.setattr(daemon.focus, "is_wayland", lambda: True)
+    monkeypatch.setattr(daemon.focus, "running_appids", lambda: ["1374490"])
+    assert d._detect_appid() == "1374490"
+    assert d.wayland is True  # latched on
+
+
+def test_detect_appid_self_heals_when_wayland_socket_appears_late(
+        tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    d = daemon.Daemon(cfg_path=p, engine=SpyEngine(),
+                      appid_fn=lambda: None, model="X")
+    d.reload_config()
+    monkeypatch.setattr(daemon.focus, "running_appids", lambda: ["1374490"])
+    # Boot-time check: compositor socket not up yet -> must NOT latch False.
+    monkeypatch.setattr(daemon.focus, "is_wayland", lambda: False)
+    d._note_wayland()
+    assert d.wayland is False
+    assert d._detect_appid() is None
+    # Compositor comes up; the next poll picks up the fallback on its own.
+    monkeypatch.setattr(daemon.focus, "is_wayland", lambda: True)
+    assert d._detect_appid() == "1374490"
+    assert d.wayland is True
+
+
+def test_detect_appid_no_fallback_on_x11(tmp_path: Path, monkeypatch):
+    p = tmp_path / "config.json"
+    _write_cfg(p)
+    d = daemon.Daemon(cfg_path=p, engine=SpyEngine(),
+                      appid_fn=lambda: None, model="X")
+    d.reload_config()
+    monkeypatch.setattr(daemon.focus, "is_wayland", lambda: False)
+    monkeypatch.setattr(daemon.focus, "running_appids", lambda: ["1374490"])
+    assert d._detect_appid() is None
 
 
 def test_resolve_signal_device_survives_ratbag_error(tmp_path: Path, monkeypatch):

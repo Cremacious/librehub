@@ -55,3 +55,25 @@ def test_pretty_letter():
 
 def test_pretty_fkey():
     assert gui.pretty_key("f1") == "F1"
+
+
+def test_parse_library_paths_multiple():
+    vdf = '''
+    "libraryfolders"
+    {
+        "0"
+        {
+            "path"		"/home/chris/.local/share/Steam"
+        }
+        "1"
+        {
+            "path"		"/mnt/games/SteamLibrary"
+        }
+    }
+    '''
+    assert gui.parse_library_paths(vdf) == [
+        "/home/chris/.local/share/Steam", "/mnt/games/SteamLibrary"]
+
+
+def test_parse_library_paths_none():
+    assert gui.parse_library_paths("garbage without paths") == []

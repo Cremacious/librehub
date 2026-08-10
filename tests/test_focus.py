@@ -52,3 +52,41 @@ def test_running_appids_tolerates_read_error():
     assert focus.running_appids(pids=[10, 11, 12],
                                  read_environ=flaky_read_environ) == [
         "552500", "1374490"]
+
+
+def test_is_wayland_by_session_type():
+    assert focus.is_wayland(environ={"XDG_SESSION_TYPE": "wayland"}) is True
+
+
+def test_is_wayland_by_wayland_display():
+    assert focus.is_wayland(environ={"WAYLAND_DISPLAY": "wayland-0"}) is True
+
+
+def test_is_wayland_by_socket(tmp_path):
+    # A systemd --user service lacks the env vars but the socket is present.
+    (tmp_path / "wayland-0").write_text("")
+    assert focus.is_wayland(environ={}, runtime_dir=str(tmp_path)) is True
+
+
+def test_is_wayland_false_on_x11(tmp_path):
+    assert focus.is_wayland(environ={"XDG_SESSION_TYPE": "x11"},
+                            runtime_dir=str(tmp_path)) is False
+
+
+def test_single_running_known_appid_exactly_one():
+    assert focus.single_running_known_appid(
+        {"1374490", "552500"}, running=["1374490"]) == "1374490"
+
+
+def test_single_running_known_appid_none_when_ambiguous():
+    assert focus.single_running_known_appid(
+        {"1374490", "552500"}, running=["1374490", "552500"]) is None
+
+
+def test_single_running_known_appid_none_when_no_match():
+    assert focus.single_running_known_appid(
+        {"1374490"}, running=["999999"]) is None
+
+
+def test_single_running_known_appid_empty_config():
+    assert focus.single_running_known_appid(set(), running=["1374490"]) is None

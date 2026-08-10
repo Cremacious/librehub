@@ -15,7 +15,7 @@ missing=""
 python3 -c "import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk" 2>/dev/null \
   || missing="$missing python3-gi gir1.2-gtk-3.0"
 python3 -c "import evdev" 2>/dev/null || missing="$missing python3-evdev"
-command -v ratbagctl >/dev/null 2>&1 || missing="$missing libratbag-tools"
+command -v ratbagctl >/dev/null 2>&1 || missing="$missing ratbagd"
 if [ -n "$missing" ]; then
   echo "Missing system packages:$missing"
   echo "Install them, then re-run this script:"
@@ -25,7 +25,8 @@ fi
 
 # --- 2. Console-script wrappers (run from source, use system packages) -------
 mkdir -p "$BIN"
-for entry in "gui:librehub" "daemon:librehub-daemon" "tray:librehub-tray"; do
+for entry in "gui:librehub" "daemon:librehub-daemon" "tray:librehub-tray" \
+             "preflight:librehub-doctor"; do
   mod="${entry%%:*}"; name="${entry##*:}"
   cat > "$BIN/$name" <<EOF
 #!/bin/sh

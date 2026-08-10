@@ -20,14 +20,17 @@ Logitech G HUB does not run usefully on Linux. Its signature convenience — *di
 ## Requirements
 
 - **Mouse:** Logitech (or other `ratbagd`-supported) gaming mouse with programmable buttons
-- **Display server:** X11 (Wayland support planned)
+- **Display server:** X11 (precise per-window switching) or Wayland (running-game fallback — see [Auto-Switching](#auto-switching))
 - **Platform:** Steam on Linux
 - **Python:** 3.10 or later
 - **System packages:**
   - `python3-gi` — Python GTK3 bindings
   - `gir1.2-gtk-3.0` — GTK3 introspection data
-  - `libratbag-tools` — `ratbagctl` command-line utility
-- **Python dependencies:** `evdev>=1.6` (installed automatically by the installer)
+  - `ratbagd` — provides the `ratbagctl` command-line utility (the package is
+    named `libratbag-tools` on some distros, but `ratbagd` on Debian/Ubuntu/Mint)
+  - `python3-evdev` — evdev bindings (the daemon's virtual-keyboard layer)
+  - `policykit-1` (usually preinstalled) — lets the in-app **Setup / Health
+    check** perform privileged steps via a graphical password prompt
 
 ---
 
@@ -44,6 +47,32 @@ Logitech G HUB does not run usefully on Linux. Its signature convenience — *di
 4. Installs and enables the daemon as a systemd `--user` service
 
 **Important:** After running `install.sh`, you must **log out and back in** for the `input` group membership to take effect. The daemon will start automatically on next login.
+
+### First-run setup / Health check (in-app)
+
+The GUI has a built-in **Setup / Health check** panel that automates everything
+above and diagnoses a half-finished setup. On first launch (or whenever
+something isn't ready) it opens automatically; you can also open it any time
+via the **"Setup / Health check"** button.
+
+It verifies each requirement and offers a one-click fix where possible:
+
+| Check | Fix offered |
+|-------|-------------|
+| System packages (`python3-evdev`, `ratbagd`) | **Run system setup** (installs via `pkexec` — one password prompt) |
+| `/dev/uinput` udev rule | **Run system setup** |
+| `input` group — present **and** active in this session | **Run system setup** to join; a clear **log out / back in** prompt to activate |
+| Daemon running & remapping active | **Start** / **Restart daemon** |
+| Mouse detected & buttons assigned | **Set up mouse** |
+
+The "in the group but not active until re-login" distinction is called out
+explicitly — that's the most common first-run gotcha.
+
+Prefer the terminal? Run the same checks headlessly:
+
+```bash
+librehub-doctor        # or: python3 -m librehub.preflight
+```
 
 ---
 
@@ -144,7 +173,16 @@ Once a game is configured, LibreHub's daemon will:
 - Monitor which game has keyboard focus (via Steam AppID)
 - Automatically activate that game's bindings when it launches
 - Fall back to the `default` bindings when no mapped game is focused
-- Report unmapped games in systemd logs so you can discover and add them
+
+**X11 vs Wayland.** On X11 the daemon reads the focused window precisely, so
+bindings apply only while the game is actually focused. Wayland has no
+unprivileged "which window is focused" query, so there the daemon uses a
+**running-game fallback**: if exactly one *configured* game is running, its
+profile is activated (detected via `/proc`, independent of the compositor).
+The daemon auto-detects the session and logs which mode it's in. Caveats on
+Wayland: bindings stay active while the game is running even if you alt-tab
+away, and if two configured games run at once the choice is ambiguous so it
+falls back to `default`.
 
 ---
 
@@ -163,7 +201,8 @@ The `librehub-daemon`:
 2. Creates a virtual `uinput` keyboard for output
 3. Looks up the currently focused game's binding set (or the default)
 4. Maps incoming F-codes to the configured keys and injects them
-5. Watches `_NET_ACTIVE_WINDOW` (~500ms poll) to detect game focus changes
+5. Detects game focus changes (~500ms poll): `_NET_ACTIVE_WINDOW` on X11, or
+   the running-game fallback on Wayland (see [Auto-Switching](#auto-switching))
 
 **Result:** no interception of pointer movement or clicks; the daemon only handles button-to-key translation.
 
@@ -174,7 +213,7 @@ The `librehub-daemon`:
 - **One key per binding:** buttons map to single keys, not macros or modifier combos
 - **Steam games only:** AppID matching; non-Steam games require manual setup (planned for v2)
 - **Logitech/ratbagd mice only:** requires hardware that ratbagd supports (universal engine planned)
-- **X11 only:** Wayland support planned
+- **Wayland switching is coarse:** precise per-window focus works on X11; on Wayland, switching is by running game (one configured game at a time) — see [Auto-Switching](#auto-switching)
 
 ### Known limitations
 
@@ -188,9 +227,11 @@ The `librehub-daemon`:
 - **v2:** Macros and modifier combinations (Ctrl+Q, multi-key sequences)
 - **v2:** Non-Steam game matching (by window title, process name)
 - **v3:** Universal mouse engine (support any mouse via full evdev remapping)
-- **v3:** Wayland support
+- **v3:** Precise Wayland focus tracking (per-compositor, e.g. KWin scripting) to replace the running-game fallback
 
 **Recently shipped:**
+- Wayland support via a running-game fallback (auto-detected; profile switches by which configured game is running)
+- In-app first-run **Setup / Health check** (diagnoses packages, udev rule, `input` group activation, daemon, and mouse setup; fixes via `pkexec`)
 - Guided in-app mouse setup ("Set up mouse" dialog auto-assigns F13–F24 via `ratbagd`)
 
 ---
@@ -208,6 +249,21 @@ MIT License. See `LICENSE` for details.
 ---
 
 ## Troubleshooting
+
+**First stop:** open the in-app **Setup / Health check** (or run `librehub-doctor`).
+It pinpoints exactly which requirement is unmet and offers the fix.
+
+**"Daemon not running" in the GUI, but it looks like it's running?**
+The status now refreshes live, so a transient startup message clears on its own.
+If it persists, the daemon is genuinely unreachable — start it below.
+
+**"Running, but remapping is inactive"?**
+The daemon is up but couldn't grab the mouse's signal device — almost always
+because the `input` group isn't active in the daemon's session yet. Log out and
+back in if you just installed, then **restart the daemon**:
+```bash
+systemctl --user restart librehub-daemon
+```
 
 **Daemon not starting?**
 ```bash

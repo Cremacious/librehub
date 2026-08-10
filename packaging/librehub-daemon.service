@@ -1,5 +1,9 @@
 [Unit]
 Description=LibreHub per-game mouse remapper daemon
+# Prefer starting after the GUI session is up so the Wayland socket exists;
+# the daemon also self-heals if it still starts too early (re-checks live).
+After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 ExecStart=%h/.local/bin/librehub-daemon
