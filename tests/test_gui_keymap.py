@@ -77,3 +77,12 @@ def test_parse_library_paths_multiple():
 
 def test_parse_library_paths_none():
     assert gui.parse_library_paths("garbage without paths") == []
+
+
+def test_button_label_known_index():
+    assert gui.button_label("KEY_F20", {"4": "KEY_F20", "5": "KEY_F21"}) \
+        == "Button 4"
+
+
+def test_button_label_unknown_falls_back_to_code():
+    assert gui.button_label("KEY_F13", {}) == "F13"

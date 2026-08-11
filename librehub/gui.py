@@ -1,4 +1,11 @@
-"""GTK3 editor for LibreHub per-game mouse bindings."""
+"""GTK3 editor for LibreHub per-game mouse bindings (redesigned UI).
+
+Structure follows design_handoff_librehub_ui/README.md: a HeaderBar with a
+status pill and app menu, a 250px sidebar ListBox of profiles (inline rename,
+per-row popover), and a content pane showing that profile's bindings with an
+empty state and an inline error banner. First run is handled by the wizard
+(see librehub/wizard.py); all colors/spacing live in librehub/theme.py.
+"""
 from __future__ import annotations
 
 import os
@@ -16,44 +23,24 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from . import config as C  # noqa: E402
-from . import focus, ipc, keys, preflight, ratbag  # noqa: E402
-
-_STATUS_ICON = {
-    preflight.Status.OK: "✅",
-    preflight.Status.WARN: "⚠️",
-    preflight.Status.FAIL: "❌",
-}
+from . import focus, ipc, keys, prefs as P, ratbag, theme  # noqa: E402
 
 # ratbagctl reports these quoted, e.g. "'button 1'" (see parse_profile_buttons).
 _PRIMARY_BUTTON_ACTIONS = {"'button 1'", "'button 2'", "'button 3'"}
 
 _MANIFEST_NAME_RE = re.compile(r'"name"\s+"([^"]*)"')
+_LIBRARY_PATH_RE = re.compile(r'"path"\s+"([^"]+)"')
 
 # GDK keyval -> canonical key name understood by keys.to_code.
 _GDK_SPECIAL = {
-    Gdk.KEY_space: "space",
-    Gdk.KEY_Return: "enter",
-    Gdk.KEY_KP_Enter: "enter",
-    Gdk.KEY_Escape: "esc",
-    Gdk.KEY_Tab: "tab",
-    Gdk.KEY_BackSpace: "backspace",
-    Gdk.KEY_Delete: "delete",
-    Gdk.KEY_Insert: "insert",
-    Gdk.KEY_Home: "home",
-    Gdk.KEY_End: "end",
-    Gdk.KEY_Page_Up: "pageup",
-    Gdk.KEY_Page_Down: "pagedown",
-    Gdk.KEY_Up: "up",
-    Gdk.KEY_Down: "down",
-    Gdk.KEY_Left: "left",
-    Gdk.KEY_Right: "right",
-    Gdk.KEY_Shift_L: "shift",
-    Gdk.KEY_Shift_R: "shift",
-    Gdk.KEY_Control_L: "ctrl",
-    Gdk.KEY_Control_R: "ctrl",
-    Gdk.KEY_Alt_L: "alt",
-    Gdk.KEY_Alt_R: "alt",
-    Gdk.KEY_Caps_Lock: "capslock",
+    Gdk.KEY_space: "space", Gdk.KEY_Return: "enter", Gdk.KEY_KP_Enter: "enter",
+    Gdk.KEY_Escape: "esc", Gdk.KEY_Tab: "tab", Gdk.KEY_BackSpace: "backspace",
+    Gdk.KEY_Delete: "delete", Gdk.KEY_Insert: "insert", Gdk.KEY_Home: "home",
+    Gdk.KEY_End: "end", Gdk.KEY_Page_Up: "pageup", Gdk.KEY_Page_Down: "pagedown",
+    Gdk.KEY_Up: "up", Gdk.KEY_Down: "down", Gdk.KEY_Left: "left",
+    Gdk.KEY_Right: "right", Gdk.KEY_Shift_L: "shift", Gdk.KEY_Shift_R: "shift",
+    Gdk.KEY_Control_L: "ctrl", Gdk.KEY_Control_R: "ctrl", Gdk.KEY_Alt_L: "alt",
+    Gdk.KEY_Alt_R: "alt", Gdk.KEY_Caps_Lock: "capslock",
 }
 
 _PRETTY = {
@@ -65,9 +52,9 @@ _PRETTY = {
 }
 
 
+# --- pure helpers (unit-tested) ---------------------------------------------
+
 def key_name_from_keyval(keyval: int) -> str | None:
-    """Translate a GDK keyval (from a key-press) into a canonical key name
-    that keys.to_code accepts, or None if unsupported."""
     if keyval in _GDK_SPECIAL:
         return _GDK_SPECIAL[keyval]
     if Gdk.KEY_F1 <= keyval <= Gdk.KEY_F24:
@@ -86,7 +73,6 @@ def key_name_from_keyval(keyval: int) -> str | None:
 
 
 def pretty_key(name: str) -> str:
-    """Human-friendly label for a stored key name."""
     if name in _PRETTY:
         return _PRETTY[name]
     if re.fullmatch(r"f\d{1,2}", name):
@@ -94,26 +80,27 @@ def pretty_key(name: str) -> str:
     return name.upper() if len(name) == 1 else name.capitalize()
 
 
-_LIBRARY_PATH_RE = re.compile(r'"path"\s+"([^"]+)"')
+def button_label(fcode: str, managed_buttons: dict[str, str]) -> str:
+    """Human-ish name for a signal code: 'Button 4' when we know the index,
+    else the bare F-code (e.g. 'F13')."""
+    for idx, code in managed_buttons.items():
+        if code == fcode:
+            return f"Button {idx}"
+    return fcode.removeprefix("KEY_")
+
+
+def parse_library_paths(vdf_text: str) -> list[str]:
+    return _LIBRARY_PATH_RE.findall(vdf_text)
 
 
 def _steam_roots() -> list[Path]:
     home = Path.home()
-    return [
-        home / ".steam" / "steam",
-        home / ".steam" / "root",
-        home / ".steam" / "debian-installation",
-        home / ".local" / "share" / "Steam",
-    ]
-
-
-def parse_library_paths(vdf_text: str) -> list[str]:
-    """Extract Steam library base paths from a libraryfolders.vdf body."""
-    return _LIBRARY_PATH_RE.findall(vdf_text)
+    return [home / ".steam" / "steam", home / ".steam" / "root",
+            home / ".steam" / "debian-installation",
+            home / ".local" / "share" / "Steam"]
 
 
 def _steamapps_dirs() -> list[Path]:
-    """Every steamapps dir Steam knows about, incl. extra library folders."""
     dirs: list[Path] = []
     seen: set[Path] = set()
 
@@ -139,7 +126,6 @@ def _steam_manifest_paths(appid: str) -> list[Path]:
 
 
 def _resolve_game_name(appid: str) -> str:
-    """Best-effort display name for a Steam AppID from local manifests."""
     for path in _steam_manifest_paths(appid):
         try:
             text = path.read_text(errors="replace")
@@ -164,164 +150,920 @@ def _ipc_request(msg: dict, timeout: float = 11) -> dict | None:
         return None
 
 
-class Window(Gtk.Window):
-    def __init__(self):
+# --- small widget builders ---------------------------------------------------
+
+def _avatar(letter: str) -> Gtk.Label:
+    a = Gtk.Label(label=letter[:1].upper() if letter else "?")
+    a.get_style_context().add_class("avatar")
+    a.set_size_request(22, 22)
+    return a
+
+
+def _icon_button(icon_name: str, css: str = "lh-icon") -> Gtk.Button:
+    b = Gtk.Button()
+    b.add(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU))
+    b.get_style_context().add_class(css)
+    return b
+
+
+# --- sidebar row -------------------------------------------------------------
+
+class ProfileRow(Gtk.ListBoxRow):
+    """A sidebar profile: avatar, name (+AppID), trailing count / overflow."""
+
+    def __init__(self, win, pid: str, name: str, count: int, is_default: bool):
+        super().__init__()
+        self.win = win
+        self.pid = pid            # "default" or an AppID
+        self.is_default = is_default
+        self.name = name
+        self._editing = False
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        box.set_margin_top(9)
+        box.set_margin_bottom(9)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        self.add(box)
+
+        self.avatar = _avatar("★" if is_default else name)
+        if is_default:
+            self.avatar.set_label("★")
+        box.pack_start(self.avatar, False, False, 0)
+
+        namecol = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        self.name_lbl = Gtk.Label(label=name, xalign=0)
+        namecol.pack_start(self.name_lbl, False, False, 0)
+        if not is_default:
+            self.appid_lbl = Gtk.Label(label=pid, xalign=0)
+            self.appid_lbl.get_style_context().add_class("appid")
+            namecol.pack_start(self.appid_lbl, False, False, 0)
+        self.namecol = namecol
+        box.pack_start(namecol, True, True, 0)
+
+        self.count_lbl = Gtk.Label(label=str(count))
+        self.count_lbl.get_style_context().add_class("count")
+        box.pack_end(self.count_lbl, False, False, 0)
+
+        self.overflow = _icon_button("view-more-symbolic", "lh-overflow")
+        self.overflow.set_size_request(22, 22)
+        self.overflow.connect("clicked",
+                              lambda _b: self.win.open_row_menu(self))
+        self.overflow.set_no_show_all(True)  # visibility driven by selection
+        box.pack_end(self.overflow, False, False, 0)
+
+        self.connect("button-press-event", self._on_button_press)
+
+    def _on_button_press(self, _w, event):
+        if event.button == 3:  # right-click
+            self.win.profile_list.select_row(self)
+            self.win.open_row_menu(self)
+            return True
+        return False
+
+    def set_selected_style(self, selected: bool):
+        self.count_lbl.set_visible(not selected)
+        self.overflow.set_visible(selected and not self.is_default)
+
+    # inline rename ----------------------------------------------------------
+    def start_edit(self):
+        if self._editing or self.is_default:
+            return
+        self._editing = True
+        self.get_style_context().add_class("editing")
+        self.avatar.get_style_context().add_class("editing")
+        self.name_lbl.hide()
+        self.entry = Gtk.Entry()
+        self.entry.set_text(self.name)
+        self.entry.select_region(0, -1)
+        self.namecol.pack_start(self.entry, False, False, 0)
+        self.namecol.reorder_child(self.entry, 0)
+        self.entry.show()
+        self.entry.grab_focus()
+        self.entry.connect("activate", lambda _e: self._commit())
+        self.entry.connect("focus-out-event", lambda *_a: self._commit())
+        self.entry.connect("key-press-event", self._on_edit_key)
+
+    def _on_edit_key(self, _w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self._cancel()
+            return True
+        return False
+
+    def _finish_edit(self):
+        self._editing = False
+        self.get_style_context().remove_class("editing")
+        self.avatar.get_style_context().remove_class("editing")
+        if getattr(self, "entry", None) is not None:
+            self.entry.destroy()
+            self.entry = None
+        self.name_lbl.show()
+
+    def _cancel(self):
+        self._finish_edit()
+
+    def _commit(self):
+        if not self._editing:
+            return
+        new = self.entry.get_text().strip()
+        self._finish_edit()
+        if new and new != self.name:
+            self.win.commit_rename(self.pid, new)
+
+
+# --- binding row -------------------------------------------------------------
+
+class BindingRow(Gtk.ListBoxRow):
+    def __init__(self, win, fcode: str, keyname: str):
+        super().__init__()
+        self.win = win
+        self.fcode = fcode
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        self.add(box)
+
+        chip = Gtk.Label(label=button_label(fcode, win.config.managed_buttons))
+        chip.get_style_context().add_class("chip")
+        box.pack_start(chip, False, False, 0)
+
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic",
+                                             Gtk.IconSize.MENU)
+        arrow.get_style_context().add_class("arrow")
+        box.pack_start(arrow, False, False, 0)
+
+        cap = Gtk.Label(label=pretty_key(keyname))
+        cap.get_style_context().add_class("keycap")
+        box.pack_start(cap, False, False, 0)
+
+        code = Gtk.Label(label=fcode, xalign=0)
+        code.get_style_context().add_class("keycode")
+        box.pack_start(code, True, True, 0)
+
+        rm = _icon_button("window-close-symbolic", "remove")
+        rm.connect("clicked", lambda _b: win.remove_binding(fcode))
+        box.pack_end(rm, False, False, 0)
+
+
+# --- main window -------------------------------------------------------------
+
+class MainWindow(Gtk.Window):
+    def __init__(self, prefs: P.Prefs | None = None):
         super().__init__(title="LibreHub")
-        self.set_default_size(760, 480)
-        # Float above other windows so the editor can be summoned over a
-        # (borderless) fullscreen game instead of hiding behind it.
-        self.set_keep_above(True)
+        self.prefs = prefs or P.load()
+        self.get_style_context().add_class("lh-root")
+        theme.apply_appearance(self.prefs.appearance)
+        self.set_default_size(900, 600)
+        self.set_size_request(900, 600)
+        self.set_keep_above(self.prefs.keep_above)
+
         self.cfg_path = C.config_path()
-        self._first_run = not self.cfg_path.exists()
-        self._editing: str | None = None
-        self._config_warning: str | None = None
         try:
             self.config = C.load(self.cfg_path)
-        except C.ConfigError as e:
+        except C.ConfigError:
             self.config = C.default_config()
-            if self.cfg_path.exists():
-                backup = self.cfg_path.with_suffix(self.cfg_path.suffix + ".bak")
-                try:
-                    os.replace(self.cfg_path, backup)
-                    self._config_warning = (
-                        f"Could not read {self.cfg_path}: {e}\n"
-                        f"The unreadable file was backed up to {backup.name}; "
-                        "starting from a fresh default config."
-                    )
-                except OSError as backup_err:
-                    self._config_warning = (
-                        f"Could not read {self.cfg_path}: {e}\n"
-                        f"Also failed to back it up: {backup_err}. "
-                        "Starting from a fresh default config; saving may "
-                        "overwrite the unreadable file."
-                    )
-            # else: no config file yet (first run) — nothing to warn about.
+        self._selected_pid: str | None = None
+        self._banner_kind: str | None = None
 
-        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._build_header()
+        self._build_body()
+
+        self._refresh_profiles()
+        self._refresh_status()
+        GLib.timeout_add_seconds(2, self._poll_status)
+
+    # header -----------------------------------------------------------------
+    def _build_header(self):
+        hb = Gtk.HeaderBar()
+        hb.set_show_close_button(True)
+        hb.get_style_context().add_class("lh-header")
+        hb.set_custom_title(Gtk.Box())  # suppress centered window title
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        lbl = Gtk.Label(label="LibreHub")
+        lbl.get_style_context().add_class("lh-title")
+        title_box.pack_start(lbl, False, False, 0)
+
+        self.pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.pill.get_style_context().add_class("status-pill")
+        self.pill.set_valign(Gtk.Align.CENTER)  # don't stretch to header height
+        dot = Gtk.Box()
+        dot.get_style_context().add_class("status-dot")
+        dot.set_valign(Gtk.Align.CENTER)
+        self.pill.pack_start(dot, False, False, 0)
+        self.pill_lbl = Gtk.Label(label="Remapping active")
+        self.pill.pack_start(self.pill_lbl, False, False, 0)
+        title_box.pack_start(self.pill, False, False, 0)
+        hb.pack_start(title_box)
+
+        menu_btn = Gtk.MenuButton()
+        menu_btn.add(Gtk.Image.new_from_icon_name("open-menu-symbolic",
+                                                  Gtk.IconSize.MENU))
+        menu_btn.get_style_context().add_class("lh-icon")
+        menu_btn.set_popover(self._build_app_menu())
+        hb.pack_end(menu_btn)
+
+        self.set_titlebar(hb)
+
+    def _build_app_menu(self) -> Gtk.Popover:
+        pop = Gtk.Popover()
+        pop.get_style_context().add_class("lh-popover")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        for label, cb in (
+            ("Preferences", self._show_preferences),
+            ("Set up mouse", lambda: show_setup_mouse(self, self)),
+            ("Run health check", self._show_health_check),
+            ("About", self._show_about),
+        ):
+            b = Gtk.Button(label=label)
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("popover-item")
+            b.connect("clicked", lambda _b, f=cb: (pop.popdown(), f()))
+            box.pack_start(b, False, False, 0)
+        box.show_all()
+        pop.add(box)
+        return pop
+
+    # body -------------------------------------------------------------------
+    def _build_body(self):
+        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.add(outer)
 
-        # left: game list + add/remove/setup
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.game_store = Gtk.ListStore(str, str)  # appid, label
-        self.game_view = Gtk.TreeView(model=self.game_store)
-        self.game_view.append_column(
-            Gtk.TreeViewColumn("Game", Gtk.CellRendererText(), text=1))
-        self.game_view.get_selection().connect("changed", self._on_game_selected)
-        left.pack_start(self.game_view, True, True, 0)
-        add_btn = Gtk.Button(label="Add game I'm playing now")
-        add_btn.connect("clicked", self._on_add_current)
-        left.pack_start(add_btn, False, False, 0)
-        add_manual = Gtk.Button(label="Add by AppID…")
-        add_manual.connect("clicked", self._on_add_manual)
-        left.pack_start(add_manual, False, False, 0)
-        rename_game_btn = Gtk.Button(label="Rename selected game")
-        rename_game_btn.connect("clicked", self._on_rename_game)
-        left.pack_start(rename_game_btn, False, False, 0)
-        remove_game_btn = Gtk.Button(label="Remove selected game")
-        remove_game_btn.connect("clicked", self._on_remove_game)
-        left.pack_start(remove_game_btn, False, False, 0)
-        setup_mouse_btn = Gtk.Button(label="Set up mouse")
-        setup_mouse_btn.connect("clicked", self._on_setup_mouse)
-        left.pack_start(setup_mouse_btn, False, False, 0)
-        health_btn = Gtk.Button(label="Setup / Health check")
-        health_btn.connect("clicked", lambda _b: self._open_setup_dialog())
-        left.pack_start(health_btn, False, False, 0)
-        outer.pack_start(left, False, False, 0)
+        # sidebar
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        sidebar.get_style_context().add_class("lh-sidebar")
+        sidebar.set_size_request(250, -1)
+        header = Gtk.Label(label="PROFILES", xalign=0)
+        header.get_style_context().add_class("section-header")
+        sidebar.pack_start(header, False, False, 0)
 
-        # right: bindings for the selected profile
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.profile_label = Gtk.Label(label="Select a game or the default profile")
-        self.profile_label.set_xalign(0)
-        right.pack_start(self.profile_label, False, False, 0)
-        # bind_store: (fcode, canonical key name, pretty label)
-        self.bind_store = Gtk.ListStore(str, str, str)
-        self.bind_view = Gtk.TreeView(model=self.bind_store)
-        self.bind_view.append_column(
-            Gtk.TreeViewColumn("Mouse button", Gtk.CellRendererText(), text=0))
-        self.bind_view.append_column(
-            Gtk.TreeViewColumn("Sends key", Gtk.CellRendererText(), text=2))
-        right.pack_start(self.bind_view, True, True, 0)
-        add_bind_btn = Gtk.Button(label="Add keybinding")
-        add_bind_btn.connect("clicked", self._on_add_keybinding)
-        right.pack_start(add_bind_btn, False, False, 0)
-        remove_bind_btn = Gtk.Button(label="Remove selected keybinding")
-        remove_bind_btn.connect("clicked", self._on_remove_binding)
-        right.pack_start(remove_bind_btn, False, False, 0)
-        self.status = Gtk.Label(label="")
-        self.status.set_xalign(0)
-        right.pack_start(self.status, False, False, 0)
-        outer.pack_start(right, True, True, 0)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.profile_list = Gtk.ListBox()
+        self.profile_list.get_style_context().add_class("profile-list")
+        self.profile_list.connect("row-selected", self._on_profile_selected)
+        self.profile_list.connect("key-press-event", self._on_list_key)
+        scroller.add(self.profile_list)
+        sidebar.pack_start(scroller, True, True, 0)
 
-        self._refresh_games()
-        self._refresh_status()
-        # Re-poll status so a daemon that comes up (or goes down) later is
-        # reflected without reopening the window — the one-shot check at launch
-        # used to latch onto a stale "not running" during daemon startup.
-        GLib.timeout_add_seconds(2, self._poll_status)
-        # Guide the user through anything that still needs doing.
-        GLib.idle_add(self._maybe_autoshow_setup)
-        if self._config_warning:
-            self.status.set_text(
-                f"config error, backed up to .bak — {self.status.get_text()}")
-            self.connect("show", lambda *_a: self._error(self._config_warning))
+        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        footer.get_style_context().add_class("sidebar-footer")
+        add_btn = Gtk.Button(label="+ Add game")
+        add_btn.get_style_context().add_class("lh-secondary")
+        add_btn.get_style_context().add_class("add-game")
+        add_btn.connect("clicked", lambda _b: self._show_add_game())
+        footer.pack_start(add_btn, False, False, 0)
+        sidebar.pack_start(footer, False, False, 0)
+        outer.pack_start(sidebar, False, False, 0)
 
-    # --- helpers ---
-    def _refresh_games(self):
-        self.game_store.clear()
-        self.game_store.append(["", "(default)"])
+        # content
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        content.get_style_context().add_class("lh-root")
+        outer.pack_start(content, True, True, 0)
+
+        titleblock = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        titleblock.get_style_context().add_class("title-block")
+        titlecol = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.title_lbl = Gtk.Label(label="", xalign=0)
+        self.title_lbl.get_style_context().add_class("game-title")
+        self.subtitle_lbl = Gtk.Label(label="", xalign=0)
+        self.subtitle_lbl.get_style_context().add_class("subtitle")
+        self.subtitle_lbl.set_line_wrap(True)
+        titlecol.pack_start(self.title_lbl, False, False, 0)
+        titlecol.pack_start(self.subtitle_lbl, False, False, 0)
+        titleblock.pack_start(titlecol, True, True, 0)
+        self.add_binding_btn = Gtk.Button(label="Add binding")
+        self.add_binding_btn.get_style_context().add_class("lh-primary")
+        self.add_binding_btn.connect("clicked",
+                                     lambda _b: self._add_binding_flow())
+        titleblock.pack_end(self.add_binding_btn, False, False, 0)
+        content.pack_start(titleblock, False, False, 0)
+
+        # error banner (hidden unless set)
+        self.banner = self._build_banner()
+        self.banner.set_no_show_all(True)
+        content.pack_start(self.banner, False, False, 0)
+
+        # bindings list / empty state live in a stack-like area
+        self.body_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.pack_start(self.body_area, True, True, 0)
+
+        self.bind_scroller = Gtk.ScrolledWindow()
+        self.bind_scroller.set_policy(Gtk.PolicyType.NEVER,
+                                      Gtk.PolicyType.AUTOMATIC)
+        self.bind_scroller.set_margin_top(8)
+        self.bind_scroller.set_margin_bottom(8)
+        self.bind_scroller.set_margin_start(16)
+        self.bind_scroller.set_margin_end(16)
+        self.bind_list = Gtk.ListBox()
+        self.bind_list.get_style_context().add_class("bindings")
+        self.bind_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.bind_scroller.add(self.bind_list)
+        self.body_area.pack_start(self.bind_scroller, True, True, 0)
+
+        self.empty_state = self._build_empty_state()
+        self.empty_state.set_no_show_all(True)
+        self.body_area.pack_start(self.empty_state, True, True, 0)
+
+        # footer bar
+        self.footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.footer.get_style_context().add_class("footer-bar")
+        self.footer_left = Gtk.Label(label="", xalign=0)
+        self.footer.pack_start(self.footer_left, True, True, 0)
+        saved = Gtk.Label(label="Saved automatically")
+        self.footer.pack_end(saved, False, False, 0)
+        content.pack_start(self.footer, False, False, 0)
+
+    def _build_banner(self) -> Gtk.Box:
+        b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
+        b.get_style_context().add_class("banner")
+        b.set_margin_top(16)
+        b.set_margin_start(18)
+        b.set_margin_end(18)
+        glyph = Gtk.Image.new_from_icon_name("dialog-warning-symbolic",
+                                             Gtk.IconSize.MENU)
+        glyph.get_style_context().add_class("banner-glyph")
+        glyph.set_valign(Gtk.Align.START)
+        b.pack_start(glyph, False, False, 0)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.banner_title = Gtk.Label(label="Remapping is paused", xalign=0)
+        self.banner_title.get_style_context().add_class("banner-title")
+        self.banner_body = Gtk.Label(xalign=0, label="")
+        self.banner_body.get_style_context().add_class("banner-body")
+        self.banner_body.set_line_wrap(True)
+        col.pack_start(self.banner_title, False, False, 0)
+        col.pack_start(self.banner_body, False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        restart = Gtk.Button(label="Restart daemon")
+        restart.get_style_context().add_class("lh-primary")
+        restart.connect("clicked", lambda _b: self._restart_daemon())
+        row.pack_start(restart, False, False, 0)
+        col.pack_start(row, False, False, 0)
+        b.pack_start(col, True, True, 0)
+        return b
+
+    def _build_empty_state(self) -> Gtk.Box:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        t = Gtk.Label(label="No bindings for this game")
+        t.get_style_context().add_class("empty-title")
+        body = Gtk.Label(label="Press Add binding, click a mouse button, then "
+                               "the key it should send.")
+        body.get_style_context().add_class("empty-body")
+        body.set_line_wrap(True)
+        body.set_justify(Gtk.Justification.CENTER)
+        body.set_max_width_chars(36)
+        btn = Gtk.Button(label="Add binding")
+        btn.get_style_context().add_class("lh-primary")
+        btn.set_halign(Gtk.Align.CENTER)
+        btn.connect("clicked", lambda _b: self._add_binding_flow())
+        box.pack_start(t, False, False, 0)
+        box.pack_start(body, False, False, 0)
+        box.pack_start(btn, False, False, 0)
+        return box
+
+    # data -> view -----------------------------------------------------------
+    def _profiles(self):
+        items = [("default", "Default", self.config.default, True)]
         for aid, g in self.config.games.items():
-            self.game_store.append([aid, f"{g.name} [{aid}]"])
+            items.append((aid, g.name, g, False))
+        return items
 
-    def _refresh_status(self):
-        st = _ipc_request({"cmd": "status"}, timeout=1.5)
-        if st and st.get("daemon"):
-            if st.get("remapping"):
-                self.status.set_text(
-                    f"daemon: running · device: {st.get('device')} · "
-                    f"active: {st.get('active_appid') or 'default'}")
-            else:
-                self.status.set_text(
-                    "daemon: running, but remapping is inactive — "
-                    "open Setup / Health check")
+    def _refresh_profiles(self):
+        prev = self._selected_pid
+        for child in self.profile_list.get_children():
+            self.profile_list.remove(child)
+        want_row = None
+        for pid, name, game, is_default in self._profiles():
+            row = ProfileRow(self, pid, name, len(game.bindings), is_default)
+            self.profile_list.add(row)
+            if pid == prev:
+                want_row = row
+        self.profile_list.show_all()
+        if want_row is None:
+            want_row = self.profile_list.get_row_at_index(0)
+        if want_row is not None:
+            self.profile_list.select_row(want_row)
+
+    def _on_profile_selected(self, _list, row):
+        for r in self.profile_list.get_children():
+            if isinstance(r, ProfileRow):
+                r.set_selected_style(r is row)
+        if row is None:
+            return
+        self._selected_pid = row.pid
+        self._refresh_content()
+
+    def _selected_game(self) -> C.Game | None:
+        if self._selected_pid is None:
+            return None
+        if self._selected_pid == "default":
+            return self.config.default
+        return self.config.games.get(self._selected_pid)
+
+    def _refresh_content(self):
+        game = self._selected_game()
+        if game is None:
+            return
+        is_default = self._selected_pid == "default"
+        self.title_lbl.set_text("Default profile" if is_default else game.name)
+        n = len(game.bindings)
+        plural = "" if n == 1 else "s"
+        if is_default:
+            self.subtitle_lbl.set_text(
+                f"{n} button{plural} bound · used when no mapped game is focused")
         else:
-            self.status.set_text(
-                "daemon: not running — open Setup / Health check")
+            self.subtitle_lbl.set_text(
+                f"{n} button{plural} bound · switches on automatically when "
+                "this game is focused")
+        for child in self.bind_list.get_children():
+            self.bind_list.remove(child)
+        for fcode, keyname in game.bindings.items():
+            self.bind_list.add(BindingRow(self, fcode, keyname))
+        self.bind_list.show_all()
+        has = n > 0
+        self.bind_scroller.set_visible(has)
+        self.empty_state.set_visible(not has)
 
     def _poll_status(self) -> bool:
         self._refresh_status()
-        return True  # keep the GLib timer alive
+        return True
 
-    def _maybe_autoshow_setup(self) -> bool:
-        checks = preflight.run_all(self.config.managed_buttons)
-        _surface = {preflight.FIX_RELOGIN, preflight.FIX_RESTART_DAEMON}
-        actionable = any(
-            c.status is preflight.Status.FAIL or c.fix in _surface
-            for c in checks)
-        if self._first_run or actionable:
-            self._open_setup_dialog(checks=checks)
-        return False  # run once
+    def _refresh_status(self):
+        st = _ipc_request({"cmd": "status"}, timeout=1.5)
+        ctx = self.pill.get_style_context()
+        session = "X11 · per-window switching"
+        device = "no mouse"
+        if st and st.get("daemon"):
+            device = st.get("device") or device
+            if st.get("remapping"):
+                ctx.remove_class("paused")
+                self.pill_lbl.set_text("Remapping active")
+                self._set_banner(None)
+            else:
+                ctx.add_class("paused")
+                self.pill_lbl.set_text("Remapping paused")
+                self._set_banner(
+                    "paused", "Remapping is paused",
+                    "The daemon can't reach your mouse. Restarting it usually "
+                    "fixes this.")
+        else:
+            ctx.add_class("paused")
+            self.pill_lbl.set_text("Daemon stopped")
+            self._set_banner(
+                "stopped", "Daemon not running",
+                "Start it from the app menu → Run health check.")
+        self.footer_left.set_markup(
+            f"{GLib.markup_escape_text(device)}  ·  {session}")
 
-    def _current_profile(self) -> C.Game | None:
-        """The Game object for the current game-list selection (the default
-        profile for the '(default)' row), or None if nothing is selected."""
-        model, it = self.game_view.get_selection().get_selected()
-        if it is None:
-            return None
-        aid = model[it][0]
-        self._editing = aid or None
-        return self.config.default if not aid else self.config.games.get(aid)
-
-    def _refresh_bindings(self):
-        self.bind_store.clear()
-        game = self._current_profile()
-        if game is None:
-            self.profile_label.set_text("Select a game or the default profile")
+    def _set_banner(self, kind, title="", body=""):
+        if kind == self._banner_kind:
             return
-        label = "default profile" if not self._editing else f"{game.name}"
-        self.profile_label.set_text(f"Keybindings for {label}")
-        for fcode, name in game.bindings.items():
-            self.bind_store.append([fcode, name, pretty_key(name)])
+        self._banner_kind = kind
+        if kind is None:
+            self.banner.hide()
+            return
+        self.banner_title.set_text(title)
+        self.banner_body.set_text(body)
+        self.banner.show()
+        self.banner.show_all()
 
+    # row menu + rename ------------------------------------------------------
+    def _on_list_key(self, _w, event):
+        row = self.profile_list.get_selected_row()
+        if not isinstance(row, ProfileRow):
+            return False
+        if event.keyval == Gdk.KEY_F2:
+            row.start_edit()
+            return True
+        if event.keyval == Gdk.KEY_Delete and not row.is_default:
+            self._remove_game(row.pid)
+            return True
+        return False
+
+    def open_row_menu(self, row: ProfileRow):
+        pop = Gtk.Popover()
+        pop.get_style_context().add_class("lh-popover")
+        pop.set_relative_to(row.overflow if row.overflow.get_visible() else row)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        def item(label, cb, destructive=False):
+            b = Gtk.Button(label=label)
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("popover-item")
+            if destructive:
+                b.get_style_context().add_class("destructive")
+            b.connect("clicked", lambda _b: (pop.popdown(), cb()))
+            box.pack_start(b, False, False, 0)
+
+        if not row.is_default:
+            item("Rename…", row.start_edit)
+            item("Duplicate bindings to…", lambda: self._duplicate_to(row.pid))
+            sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            sep.set_margin_top(4)
+            sep.set_margin_bottom(4)
+            box.pack_start(sep, False, False, 0)
+            item("Remove game", lambda: self._remove_game(row.pid),
+                 destructive=True)
+        else:
+            item("Duplicate bindings to…", lambda: self._duplicate_to("default"))
+        box.show_all()
+        pop.add(box)
+        pop.popup()
+
+    def commit_rename(self, pid: str, new_name: str):
+        game = self.config.games.get(pid)
+        if game is None or new_name == game.name:
+            return
+        game.name = new_name
+        if self._persist():
+            self._refresh_profiles()
+            self._confirm(f"Renamed to “{new_name}”")
+
+    def _duplicate_to(self, src_pid: str):
+        src = (self.config.default if src_pid == "default"
+               else self.config.games.get(src_pid))
+        if src is None or not src.bindings:
+            self._error("That profile has no bindings to copy.")
+            return
+        targets = [("default", "Default")] + [
+            (aid, g.name) for aid, g in self.config.games.items()
+            if aid != src_pid]
+        if not targets:
+            self._error("No other profile to copy to. Add a game first.")
+            return
+        dlg = self._dialog("Duplicate bindings", width=480)
+        c = dlg.get_content_area()
+        c.set_border_width(16)
+        c.add(Gtk.Label(label="Copy these bindings to:", xalign=0))
+        combo = Gtk.ComboBoxText()
+        for aid, name in targets:
+            combo.append(aid, name)
+        combo.set_active(0)
+        c.add(combo)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button("Copy", Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("lh-primary")
+        dlg.show_all()
+        resp = dlg.run()
+        target = combo.get_active_id()
+        dlg.destroy()
+        if resp != Gtk.ResponseType.OK or not target:
+            return
+        dst = (self.config.default if target == "default"
+               else self.config.games.get(target))
+        dst.bindings.update(dict(src.bindings))
+        if self._persist():
+            self._refresh_profiles()
+            self._refresh_content()
+            self._confirm("Bindings copied.")
+
+    def _remove_game(self, pid: str):
+        game = self.config.games.get(pid)
+        if game is None:
+            return
+        confirm = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Remove '{game.name}' [{pid}]?")
+        confirm.format_secondary_text(
+            "This deletes its bindings from LibreHub. (It does not change the "
+            "mouse's onboard button signals.)")
+        resp = confirm.run()
+        confirm.destroy()
+        if resp != Gtk.ResponseType.OK:
+            return
+        self.config.games.pop(pid, None)
+        self._selected_pid = "default"
+        if self._persist():
+            self._refresh_profiles()
+
+    # add game ---------------------------------------------------------------
+    def _show_add_game(self):
+        dlg = self._dialog("Add game", width=480)
+        c = dlg.get_content_area()
+        c.set_border_width(0)
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        wrap.set_margin_top(18)
+        wrap.set_margin_start(22)
+        wrap.set_margin_end(22)
+        c.add(wrap)
+
+        wrap.add(Gtk.Label(label="Running now", xalign=0))
+        running = [a for a in focus.running_appids()
+                   if a not in self.config.games]
+        card = Gtk.ListBox()
+        card.get_style_context().add_class("card")
+        card.set_selection_mode(Gtk.SelectionMode.NONE)
+        if running:
+            for i, aid in enumerate(running):
+                card.add(self._detected_row(aid, primary=(i == 0), dlg=dlg))
+        else:
+            row = Gtk.ListBoxRow()
+            lbl = Gtk.Label(label="No running Steam game detected.", xalign=0)
+            lbl.get_style_context().add_class("subtitle")
+            lbl.set_margin_top(11)
+            lbl.set_margin_bottom(11)
+            lbl.set_margin_start(13)
+            row.add(lbl)
+            card.add(row)
+        wrap.add(card)
+
+        manual = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        entry = Gtk.Entry()
+        entry.get_style_context().add_class("lh-entry")
+        entry.set_placeholder_text("Or paste a Steam AppID")
+        entry.set_hexpand(True)
+        manual.pack_start(entry, True, True, 0)
+        add = Gtk.Button(label="Add")
+        add.get_style_context().add_class("lh-secondary")
+
+        def add_manual(*_a):
+            aid = entry.get_text().strip()
+            if aid.isdigit():
+                self._add_game(aid)
+                dlg.destroy()
+        add.connect("clicked", add_manual)
+        entry.connect("activate", add_manual)
+        manual.pack_start(add, False, False, 0)
+        wrap.add(manual)
+
+        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+        dlg.show_all()
+        dlg.run()
+        dlg.destroy()
+
+    def _detected_row(self, aid, primary, dlg):
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        box.set_margin_top(11)
+        box.set_margin_bottom(11)
+        box.set_margin_start(13)
+        box.set_margin_end(13)
+        name = _resolve_game_name(aid)
+        box.pack_start(_avatar(name), False, False, 0)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        col.pack_start(Gtk.Label(label=name, xalign=0), False, False, 0)
+        ap = Gtk.Label(label=aid, xalign=0)
+        ap.get_style_context().add_class("keycode")
+        col.pack_start(ap, False, False, 0)
+        box.pack_start(col, True, True, 0)
+        btn = Gtk.Button(label="Add")
+        btn.get_style_context().add_class("lh-primary" if primary
+                                          else "lh-secondary")
+        btn.connect("clicked", lambda _b: (self._add_game(aid), dlg.destroy()))
+        box.pack_end(btn, False, False, 0)
+        row.add(box)
+        return row
+
+    def _add_game(self, aid: str):
+        self.config.games.setdefault(
+            aid, C.Game(name=_resolve_game_name(aid), bindings={}))
+        self._selected_pid = aid
+        if self._persist():
+            self._refresh_profiles()
+
+    # add binding (two-step, in one dialog) ----------------------------------
+    def _add_binding_flow(self):
+        game = self._selected_game()
+        if game is None:
+            self._error("Select a game or the default profile first.")
+            return
+        dlg = self._dialog("Add binding", right="1 of 2", width=480)
+        c = dlg.get_content_area()
+        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)  # noqa: F841
+
+        step = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        step.set_halign(Gtk.Align.CENTER)
+        step.set_margin_top(28)
+        step.set_margin_bottom(16)
+        circle = Gtk.Label(label="◉")
+        circle.get_style_context().add_class("wait-circle")
+        circle.set_size_request(54, 54)
+        spinner = Gtk.Spinner()
+        spinner.start()
+        headline = Gtk.Label(label="Press a mouse button")
+        headline.get_style_context().add_class("dialog-headline")
+        body = Gtk.Label(label="Any of the buttons you set up. Waiting…")
+        body.get_style_context().add_class("dialog-body")
+        body.set_line_wrap(True)
+        body.set_justify(Gtk.Justification.CENTER)
+        step.pack_start(circle, False, False, 0)
+        step.pack_start(spinner, False, False, 0)
+        step.pack_start(headline, False, False, 0)
+        step.pack_start(body, False, False, 0)
+        c.add(step)
+        dlg.show_all()
+
+        state = {"alive": True, "fcode": None, "key": None}
+
+        def detect_worker():
+            resp = _ipc_request({"cmd": "detect"})
+            GLib.idle_add(on_detected, resp)
+
+        def on_detected(resp):
+            if not state["alive"]:
+                return False
+            fcode = (resp or {}).get("fcode")
+            if not fcode:
+                self._error(
+                    "No button detected. Make sure the daemon is running and "
+                    "you've set up your mouse, then try again.", parent=dlg)
+                dlg.response(Gtk.ResponseType.CANCEL)
+                return False
+            state["fcode"] = fcode
+            spinner.stop()
+            go_step2(fcode)
+            return False
+
+        def go_step2(fcode):
+            dlg.get_titlebar().set_custom_title(_dialog_title("Add binding",
+                                                              "2 of 2"))
+            for ch in c.get_children():
+                c.remove(ch)
+            s2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            s2.set_halign(Gtk.Align.CENTER)
+            s2.set_margin_top(24)
+            s2.set_margin_bottom(16)
+            preview = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            preview.set_halign(Gtk.Align.CENTER)
+            chip = Gtk.Label(label=button_label(fcode,
+                                                self.config.managed_buttons))
+            chip.get_style_context().add_class("chip")
+            arrow = Gtk.Image.new_from_icon_name("go-next-symbolic",
+                                                 Gtk.IconSize.MENU)
+            arrow.get_style_context().add_class("arrow")
+            slot = Gtk.Label(label="?")
+            slot.get_style_context().add_class("pending-slot")
+            preview.pack_start(chip, False, False, 0)
+            preview.pack_start(arrow, False, False, 0)
+            preview.pack_start(slot, False, False, 0)
+            hl = Gtk.Label(label="Now press the key it should send")
+            hl.get_style_context().add_class("dialog-headline")
+            bd = Gtk.Label(label="Letters, numbers, arrows, Space, Enter and "
+                                 "F-keys work.")
+            bd.get_style_context().add_class("dialog-body")
+            bd.set_line_wrap(True)
+            bd.set_justify(Gtk.Justification.CENTER)
+            s2.pack_start(preview, False, False, 0)
+            s2.pack_start(hl, False, False, 0)
+            s2.pack_start(bd, False, False, 0)
+            c.add(s2)
+            c.show_all()
+
+            def on_key(_w, event):
+                name = key_name_from_keyval(event.keyval)
+                if name is None:
+                    bd.set_text("Unsupported key — try a letter, number, "
+                                "arrow, Space, Enter or an F-key.")
+                    return True
+                state["key"] = name
+                slot.set_label(pretty_key(name))
+                slot.get_style_context().remove_class("pending-slot")
+                slot.get_style_context().add_class("keycap")
+                dlg.response(Gtk.ResponseType.OK)
+                return True
+            dlg.connect("key-press-event", on_key)
+
+        threading.Thread(target=detect_worker, daemon=True).start()
+        resp = dlg.run()
+        state["alive"] = False
+        dlg.destroy()
+        if resp == Gtk.ResponseType.OK and state["fcode"] and state["key"]:
+            game.bindings[state["fcode"]] = state["key"]
+            if self._persist():
+                self._refresh_content()
+                self._refresh_profiles()
+                self._confirm(f"Bound to {pretty_key(state['key'])}.")
+
+    def remove_binding(self, fcode: str):
+        game = self._selected_game()
+        if game is None:
+            return
+        game.bindings.pop(fcode, None)
+        if self._persist():
+            self._refresh_content()
+            self._refresh_profiles()
+
+    # preferences ------------------------------------------------------------
+    def _show_preferences(self):
+        dlg = self._dialog("Preferences", width=480)
+        c = dlg.get_content_area()
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        wrap.set_margin_top(16)
+        wrap.set_margin_start(20)
+        wrap.set_margin_end(20)
+        wrap.set_margin_bottom(18)
+        c.add(wrap)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.get_style_context().add_class("card")
+
+        def switch_row(label, value, on_toggle):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            row.set_margin_top(12)
+            row.set_margin_bottom(12)
+            row.set_margin_start(14)
+            row.set_margin_end(14)
+            row.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            sw = Gtk.Switch()
+            sw.set_active(value)
+            sw.connect("state-set", lambda _s, v: (on_toggle(v), False)[1])
+            sw.set_valign(Gtk.Align.CENTER)
+            row.pack_end(sw, False, False, 0)
+            card.pack_start(row, False, False, 0)
+
+        switch_row("Keep window above games", self.prefs.keep_above,
+                   self._set_keep_above)
+        switch_row("Start daemon at login", self.prefs.start_at_login,
+                   self._set_start_at_login)
+        switch_row("Show tray icon", self.prefs.tray_icon, self._set_tray)
+        wrap.add(card)
+
+        wrap.add(Gtk.Label(label="Appearance", xalign=0))
+        seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        seg.get_style_context().add_class("linked")
+        group = None
+        for value, text in (("system", "System"), ("light", "Light"),
+                            ("dark", "Dark")):
+            rb = Gtk.RadioButton.new_with_label_from_widget(group, text)
+            rb.set_mode(False)  # draw as button, not radio indicator
+            group = group or rb
+            if self.prefs.appearance == value:
+                rb.set_active(True)
+            rb.connect("toggled", lambda b, v=value: b.get_active()
+                       and self._set_appearance(v))
+            seg.pack_start(rb, True, True, 0)
+        wrap.add(seg)
+
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        st = _ipc_request({"cmd": "status"}, timeout=1.5)
+        dev = (st or {}).get("device") if st else None
+        state = ("Daemon running · " + dev) if (st and st.get("daemon") and dev
+                                                ) else "Daemon not running"
+        bottom.pack_start(Gtk.Label(label=state, xalign=0), True, True, 0)
+        hc = Gtk.Button(label="Run health check")
+        hc.get_style_context().add_class("lh-secondary")
+        hc.connect("clicked", lambda _b: (dlg.destroy(),
+                                          self._show_health_check()))
+        bottom.pack_end(hc, False, False, 0)
+        wrap.add(bottom)
+
+        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+        dlg.show_all()
+        dlg.run()
+        dlg.destroy()
+
+    def _set_keep_above(self, value):
+        self.prefs.keep_above = value
+        self.set_keep_above(value)
+        P.save(self.prefs)
+
+    def _set_start_at_login(self, value):
+        self.prefs.start_at_login = value
+        P.save(self.prefs)
+        action = "enable" if value else "disable"
+        try:
+            subprocess.run(["systemctl", "--user", action, "librehub-daemon"],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def _set_tray(self, value):
+        self.prefs.tray_icon = value
+        P.save(self.prefs)
+
+    def _set_appearance(self, value):
+        self.prefs.appearance = value
+        P.save(self.prefs)
+        theme.apply_appearance(value)
+
+    # daemon actions / dialogs ----------------------------------------------
+    def _restart_daemon(self):
+        from . import preflight
+        ok, msg = preflight.restart_daemon()
+        self._refresh_status()
+        if not ok:
+            self._error(msg)
+        else:
+            self._confirm("Daemon restarted.")
+
+    def _show_health_check(self):
+        show_health_check(self)
+
+    def _show_about(self):
+        d = Gtk.AboutDialog(transient_for=self, modal=True)
+        d.set_program_name("LibreHub")
+        d.set_version("0.1.0")
+        d.set_comments("Per-game mouse-button remapper for Linux.")
+        d.run()
+        d.destroy()
+
+    # persistence / feedback -------------------------------------------------
     def _persist(self) -> bool:
         try:
             C.save(self.config, self.cfg_path)
@@ -330,518 +1072,221 @@ class Window(Gtk.Window):
             self._error(f"save failed: {e}")
             return False
 
-    def _on_game_selected(self, _sel):
-        self._refresh_bindings()
+    def _confirm(self, text: str):
+        # transient footer confirmation
+        self.footer_left.set_text(text)
+        GLib.timeout_add_seconds(3, lambda: (self._refresh_status(), False)[1])
 
-    # --- add keybinding: press mouse button, then press key, auto-save ---
-    def _on_add_keybinding(self, _btn):
-        game = self._current_profile()
-        if game is None:
-            self._error("Select a game (or the default profile) first.")
-            return
-        fcode = self._detect_button()
-        if fcode is None:
-            return
-        name = self._capture_key()
-        if name is None:
-            return
-        game.bindings[fcode] = name
-        if self._persist():
-            self._refresh_bindings()
-            self.status.set_text(f"bound that button to {pretty_key(name)}.")
-
-    def _detect_button(self) -> str | None:
-        # The daemon blocks up to ~10s waiting for a button press, so the IPC
-        # call runs in a worker thread — otherwise it would freeze the main
-        # loop and the "press now" popup would never paint.
-        dlg = Gtk.MessageDialog(
-            transient_for=self, modal=True,
-            message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.CANCEL,
-            text="Press a mouse button now")
-        dlg.format_secondary_text(
-            "Press the physical mouse button you want to bind. "
-            "Waiting up to 10 seconds…")
-        state = {"alive": True, "resp": None}
-
-        def work():
-            resp = _ipc_request({"cmd": "detect"})
-            GLib.idle_add(on_result, resp)
-
-        def on_result(resp):
-            if not state["alive"]:
-                return False
-            state["resp"] = resp
-            dlg.response(Gtk.ResponseType.OK)  # button detected — close popup
-            return False
-
-        threading.Thread(target=work, daemon=True).start()
-        response = dlg.run()
-        state["alive"] = False
-        dlg.destroy()
-        if response != Gtk.ResponseType.OK:
-            return None  # user cancelled
-        fcode = (state["resp"] or {}).get("fcode")
-        if not fcode:
-            self._error(
-                "No button detected within the time limit. Make sure the "
-                "daemon is running (see Setup / Health check) and that you've "
-                "run 'Set up mouse' to assign the buttons first, then try "
-                "again.")
-            return None
-        return fcode
-
-    def _capture_key(self) -> str | None:
-        dlg = Gtk.Dialog(title="Assign key", transient_for=self, modal=True)
-        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        lbl = Gtk.Label(label="Now press the key you want this button to send…")
-        dlg.get_content_area().add(lbl)
-        holder: dict[str, str] = {}
-
-        def on_key(_w, event):
-            name = key_name_from_keyval(event.keyval)
-            if name is None:
-                lbl.set_text("Unsupported key — try a letter, number, space, "
-                             "enter, an f-key, or an arrow…")
-                return True
-            holder["name"] = name
-            dlg.response(Gtk.ResponseType.OK)
-            return True
-
-        dlg.connect("key-press-event", on_key)
-        dlg.show_all()
-        resp = dlg.run()
-        dlg.destroy()
-        if resp == Gtk.ResponseType.OK:
-            return holder.get("name")
-        return None
-
-    def _on_remove_binding(self, _btn):
-        game = self._current_profile()
-        if game is None:
-            self._error("Select a game or the default profile first.")
-            return
-        model, it = self.bind_view.get_selection().get_selected()
-        if it is None:
-            self._error("Select a keybinding row to remove.")
-            return
-        fcode = model[it][0]
-        game.bindings.pop(fcode, None)
-        if self._persist():
-            self._refresh_bindings()
-            self.status.set_text("keybinding removed.")
-
-    def _on_add_current(self, _btn):
-        appids = focus.running_appids()
-        if not appids:
-            self._error(
-                "No running Steam game detected. Launch the game (through "
-                "Steam) and try again. Non-Steam games can be added with "
-                "'Add by AppID…'.")
-            return
-        if len(appids) == 1:
-            aid = appids[0]
-        else:
-            aid = self._choose_running_game(appids)
-            if aid is None:
-                return
-        self.config.games.setdefault(
-            aid, C.Game(name=_resolve_game_name(aid), bindings={}))
-        if self._persist():
-            self._refresh_games()
-            self._select_game_row(aid)
-
-    def _choose_running_game(self, appids: list[str]) -> str | None:
-        dlg = Gtk.Dialog(title="Choose a running game", transient_for=self,
-                         modal=True)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        content = dlg.get_content_area()
-        radios: dict[str, Gtk.RadioButton] = {}
-        group = None
-        for aid in appids:
-            label = f"{_resolve_game_name(aid)} [{aid}]"
-            rb = Gtk.RadioButton.new_with_label_from_widget(group, label)
-            group = group or rb
-            content.add(rb)
-            radios[aid] = rb
-        dlg.show_all()
-        response = dlg.run()
-        chosen = None
-        if response == Gtk.ResponseType.OK:
-            for aid, rb in radios.items():
-                if rb.get_active():
-                    chosen = aid
-                    break
-        dlg.destroy()
-        return chosen
-
-    def _select_game_row(self, appid: str):
-        it = self.game_store.get_iter_first()
-        while it is not None:
-            if self.game_store[it][0] == appid:
-                self.game_view.get_selection().select_iter(it)
-                break
-            it = self.game_store.iter_next(it)
-
-    def _on_add_manual(self, _btn):
-        dlg = Gtk.Dialog(title="Add by AppID", transient_for=self, modal=True)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("Steam AppID, e.g. 552500")
-        dlg.get_content_area().add(entry)
-        dlg.show_all()
-        if dlg.run() == Gtk.ResponseType.OK:
-            aid = entry.get_text().strip()
-            if aid.isdigit():
-                self.config.games.setdefault(
-                    aid, C.Game(name=_resolve_game_name(aid), bindings={}))
-                if self._persist():
-                    self._refresh_games()
-                    self._select_game_row(aid)
-        dlg.destroy()
-
-    def _on_rename_game(self, _btn):
-        model, it = self.game_view.get_selection().get_selected()
-        if it is None or not model[it][0]:
-            self._error("Select a game to rename. The default profile "
-                        "can't be renamed.")
-            return
-        aid = model[it][0]
-        game = self.config.games.get(aid)
-        if game is None:
-            return
-        dlg = Gtk.Dialog(title="Rename game", transient_for=self, modal=True)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dlg.set_default_response(Gtk.ResponseType.OK)
-        content = dlg.get_content_area()
-        content.add(Gtk.Label(label=f"New name for AppID {aid}:"))
-        entry = Gtk.Entry()
-        entry.set_text(game.name)
-        entry.set_activates_default(True)  # Enter confirms
-        content.add(entry)
-        dlg.show_all()
-        confirmed = dlg.run() == Gtk.ResponseType.OK
-        new_name = entry.get_text().strip()
-        dlg.destroy()
-        if not confirmed or not new_name or new_name == game.name:
-            return
-        game.name = new_name
-        if self._persist():
-            self._refresh_games()
-            self._select_game_row(aid)
-            self.status.set_text(f"renamed to {new_name}.")
-
-    def _on_remove_game(self, _btn):
-        model, it = self.game_view.get_selection().get_selected()
-        if it is None or not model[it][0]:
-            self._error("Select a game to remove. The default profile "
-                        "can't be removed.")
-            return
-        aid = model[it][0]
-        game = self.config.games.get(aid)
-        name = game.name if game else aid
-        confirm = Gtk.MessageDialog(
-            transient_for=self, modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.OK_CANCEL,
-            text=f"Remove '{name}' [{aid}]?")
-        confirm.format_secondary_text(
-            "This deletes its bindings from LibreHub. (It does not change "
-            "the mouse's onboard button signals.)")
-        response = confirm.run()
-        confirm.destroy()
-        if response != Gtk.ResponseType.OK:
-            return
-        self.config.games.pop(aid, None)
-        self._editing = None
-        self.bind_store.clear()
-        self.profile_label.set_text("Select a game or the default profile")
-        if not self._persist():
-            return
-        selection = self.game_view.get_selection()
-        selection.handler_block_by_func(self._on_game_selected)
-        self._refresh_games()
-        selection.handler_unblock_by_func(self._on_game_selected)
-        self.status.set_text(f"removed {name}.")
-
-    def _on_setup_mouse(self, _btn):
-        try:
-            dev = ratbag.resolve_device()
-        except ratbag.RatbagError as e:
-            self._error(f"could not detect mouse: {e}")
-            return
-        if not dev:
-            self._error("No supported mouse found.")
-            return
-
-        try:
-            info = ratbag.device_info(dev)
-        except ratbag.RatbagError as e:
-            self._error(f"could not read mouse info: {e}")
-            return
-
-        buttons = ratbag.parse_profile_buttons(info, 0)
-        remappable = {idx: action for idx, action in buttons.items()
-                      if action not in _PRIMARY_BUTTON_ACTIONS}
-        if not remappable:
-            self._error("No remappable buttons found on this mouse.")
-            return
-
-        dlg = Gtk.Dialog(title="Set up mouse", transient_for=self, modal=True)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        content = dlg.get_content_area()
-        checks: dict[int, Gtk.CheckButton] = {}
-        for idx in sorted(remappable):
-            cb = Gtk.CheckButton(
-                label=f"Button {idx} — currently {remappable[idx]}")
-            cb.set_active(str(idx) in self.config.managed_buttons)
-            content.add(cb)
-            checks[idx] = cb
-        dlg.show_all()
-        response = dlg.run()
-        checked = ([idx for idx, cb in checks.items() if cb.get_active()]
-                  if response == Gtk.ResponseType.OK else None)
-        dlg.destroy()
-        if checked is None:
-            return
-
-        # Base collision-avoidance on the mouse's ACTUAL live signals, not
-        # just what we happen to be tracking: a previously-managed button
-        # that got unchecked has its fcode dropped from managed_buttons,
-        # but the signal stays wired into the mouse's onboard profile (we
-        # don't reset it here) — so it must still count as reserved, or a
-        # later run could reissue it to a different button.
-        reserved = (set(self.config.managed_buttons.values())
-                    | ratbag.signals_in_use(buttons))
-
-        try:
-            final_managed, new_assignments = ratbag.plan_signal_assignment(
-                self.config.managed_buttons, checked, reserved)
-        except ratbag.RatbagError as e:
-            self._error(f"mouse setup failed: {e}")
-            return
-
-        try:
-            for idx, fcode in new_assignments.items():
-                ratbag.assign_signal(dev, 0, idx, fcode)
-            ratbag.set_active_profile(dev, 0)
-        except ratbag.RatbagError as e:
-            self._error(f"mouse setup failed: {e}")
-            return
-
-        self.config.managed_buttons = final_managed
-        try:
-            C.save(self.config, self.cfg_path)
-        except OSError as e:
-            self._error(f"mouse configured, but saving config failed: {e}")
-            return
-
-        self._prompt_restart_daemon()
-
-    def _prompt_restart_daemon(self):
-        dlg = Gtk.MessageDialog(
-            transient_for=self, modal=True,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.NONE,
-            text="Mouse set up. The daemon must be restarted to pick up the change.")
-        dlg.format_secondary_text(
-            "Note: unchecking a button here stops LibreHub from managing "
-            "it, but does not restore its original function — it will "
-            "keep sending its assigned signal (harmless if unbound) until "
-            "you reset it yourself in Piper or ratbagctl.")
-        dlg.add_buttons("Restart daemon", Gtk.ResponseType.OK,
-                        "I'll restart it myself", Gtk.ResponseType.CANCEL)
-        response = dlg.run()
-        dlg.destroy()
-        if response == Gtk.ResponseType.OK:
-            self._restart_daemon()
-
-    def _restart_daemon(self):
-        try:
-            result = subprocess.run(
-                ["systemctl", "--user", "restart", "librehub-daemon"],
-                capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.SubprocessError) as e:
-            self._error(f"could not restart daemon: {e}")
-            return
-        if result.returncode == 0:
-            self._refresh_status()
-            info = Gtk.MessageDialog(
-                transient_for=self, modal=True,
-                message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.OK, text="Daemon restarted.")
-            info.run()
-            info.destroy()
-        else:
-            detail = result.stderr.strip() or f"exit code {result.returncode}"
-            self._error(f"daemon restart failed: {detail}")
+    def _dialog(self, title: str, right: str | None = None,
+                width: int = 480) -> Gtk.Dialog:
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_resizable(False)
+        dlg.set_default_size(width, -1)
+        dlg.get_style_context().add_class("lh-root")
+        hb = Gtk.HeaderBar()
+        hb.set_show_close_button(True)
+        hb.get_style_context().add_class("lh-header")
+        hb.set_custom_title(_dialog_title(title, right))
+        dlg.set_titlebar(hb)
+        return dlg
 
     def _error(self, text: str, parent=None):
-        self._message(text, ok=False, parent=parent)
-
-    def _message(self, text: str, ok: bool = True, parent=None):
         dlg = Gtk.MessageDialog(
             transient_for=parent or self, modal=True,
-            message_type=Gtk.MessageType.INFO if ok else Gtk.MessageType.ERROR,
-            buttons=Gtk.ButtonsType.OK, text=text)
+            message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.OK,
+            text=text)
         dlg.run()
         dlg.destroy()
 
-    # --- first-run / health-check dialog ---
-    def _open_setup_dialog(self, checks=None):
-        dlg = Gtk.Dialog(title="LibreHub setup / health check",
-                         transient_for=self, modal=True)
-        dlg.set_default_size(600, 440)
-        content = dlg.get_content_area()
-        content.set_spacing(10)
-        content.set_border_width(12)
 
-        heading = Gtk.Label()
-        heading.set_markup("<b>System check</b>  —  everything LibreHub needs "
-                           "to remap your mouse")
-        heading.set_xalign(0)
-        heading.set_line_wrap(True)
-        content.add(heading)
+def _dialog_title(title: str, right: str | None) -> Gtk.Widget:
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    lbl = Gtk.Label(label=title)
+    lbl.get_style_context().add_class("lh-title")
+    box.pack_start(lbl, False, False, 0)
+    if right:
+        r = Gtk.Label(label=right)
+        r.get_style_context().add_class("step-counter")
+        box.pack_end(r, False, False, 0)
+    box.show_all()
+    return box
 
-        list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        content.add(list_box)
 
-        summary = Gtk.Label()
-        summary.set_xalign(0)
-        summary.set_line_wrap(True)
-        content.add(summary)
+# --- shared mouse setup (used by app menu and wizard) -----------------------
 
-        btn_setup = Gtk.Button(label="Run system setup (asks for password)")
-        btn_daemon = Gtk.Button(label="Start daemon")
-        btn_restart = Gtk.Button(label="Restart daemon")
-        btn_mouse = Gtk.Button(label="Set up mouse")
-        btn_recheck = Gtk.Button(label="Re-check")
-        action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        for b in (btn_setup, btn_daemon, btn_restart, btn_mouse):
-            action_row.pack_start(b, False, False, 0)
-        action_row.pack_end(btn_recheck, False, False, 0)
-        content.add(action_row)
-        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+def show_setup_mouse(parent: Gtk.Window, win: "MainWindow | None" = None):
+    """Port of the ratbag button-assignment flow, restyled minimally."""
+    config = win.config if win else C.load(C.config_path())
+    cfg_path = win.cfg_path if win else C.config_path()
 
-        action_btns = (btn_setup, btn_daemon, btn_restart, btn_mouse,
-                       btn_recheck)
-        # Guards against a worker thread's completion callback touching the
-        # dialog after the user has closed it.
-        state = {"alive": True}
-        dlg.connect("destroy", lambda *_a: state.__setitem__("alive", False))
+    def err(msg):
+        d = Gtk.MessageDialog(transient_for=parent, modal=True,
+                              message_type=Gtk.MessageType.ERROR,
+                              buttons=Gtk.ButtonsType.OK, text=msg)
+        d.run()
+        d.destroy()
 
-        def render(checks):
-            for child in list_box.get_children():
-                list_box.remove(child)
-            needs = {c.fix for c in checks if not c.ok}
-            for c in checks:
-                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                icon = Gtk.Label(label=_STATUS_ICON[c.status])
-                icon.set_valign(Gtk.Align.START)
-                row.pack_start(icon, False, False, 0)
-                lbl = Gtk.Label()
-                lbl.set_xalign(0)
-                lbl.set_line_wrap(True)
-                text = (f"<b>{GLib.markup_escape_text(c.title)}</b> — "
-                        f"{GLib.markup_escape_text(c.detail)}")
-                if not c.ok and c.remedy:
-                    text += (f"\n<small>{GLib.markup_escape_text(c.remedy)}"
-                             "</small>")
-                lbl.set_markup(text)
-                row.pack_start(lbl, True, True, 0)
-                list_box.pack_start(row, False, False, 0)
-            btn_setup.set_visible(preflight.FIX_PRIVILEGED in needs)
-            btn_daemon.set_visible(preflight.FIX_START_DAEMON in needs)
-            btn_restart.set_visible(preflight.FIX_RESTART_DAEMON in needs)
-            btn_mouse.set_visible(preflight.FIX_SETUP_MOUSE in needs)
-            if all(c.ok for c in checks):
-                summary.set_markup("<b>All good — LibreHub is ready.</b>")
-            elif preflight.FIX_RELOGIN in needs:
-                summary.set_markup(
-                    "<b>Almost there:</b> log out and back in (or reboot) to "
-                    "activate your new group membership, then click Re-check.")
-            else:
-                summary.set_text("")
-            list_box.show_all()
+    try:
+        dev = ratbag.resolve_device()
+    except ratbag.RatbagError as e:
+        return err(f"could not detect mouse: {e}")
+    if not dev:
+        return err("No supported mouse found.")
+    try:
+        info = ratbag.device_info(dev)
+    except ratbag.RatbagError as e:
+        return err(f"could not read mouse info: {e}")
+    buttons = ratbag.parse_profile_buttons(info, 0)
+    remappable = {i: a for i, a in buttons.items()
+                  if a not in _PRIMARY_BUTTON_ACTIONS}
+    if not remappable:
+        return err("No remappable buttons found on this mouse.")
 
-        def recheck():
-            render(preflight.run_all(self.config.managed_buttons))
+    dlg = Gtk.Dialog(title="Pick the buttons to manage", transient_for=parent,
+                     modal=True)
+    dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+    ok = dlg.add_button("Apply", Gtk.ResponseType.OK)
+    ok.get_style_context().add_class("lh-primary")
+    c = dlg.get_content_area()
+    c.set_border_width(14)
+    switches = {}
+    for idx in sorted(remappable):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.pack_start(Gtk.Label(label=f"Button {idx} — currently "
+                                       f"{remappable[idx]}", xalign=0),
+                       True, True, 0)
+        sw = Gtk.Switch()
+        sw.set_active(str(idx) in config.managed_buttons)
+        sw.set_valign(Gtk.Align.CENTER)
+        row.pack_end(sw, False, False, 0)
+        c.add(row)
+        switches[idx] = sw
+    dlg.show_all()
+    resp = dlg.run()
+    checked = [i for i, s in switches.items() if s.get_active()
+               ] if resp == Gtk.ResponseType.OK else None
+    dlg.destroy()
+    if checked is None:
+        return
 
-        def set_busy(msg):
-            for b in action_btns:
-                b.set_sensitive(False)
-            summary.set_markup(f"<i>{GLib.markup_escape_text(msg)}</i>")
+    reserved = (set(config.managed_buttons.values())
+                | ratbag.signals_in_use(buttons))
+    try:
+        final, new = ratbag.plan_signal_assignment(
+            config.managed_buttons, checked, reserved)
+        for idx, fcode in new.items():
+            ratbag.assign_signal(dev, 0, idx, fcode)
+        ratbag.set_active_profile(dev, 0)
+    except ratbag.RatbagError as e:
+        return err(f"mouse setup failed: {e}")
+    config.managed_buttons = final
+    try:
+        C.save(config, cfg_path)
+    except OSError as e:
+        return err(f"mouse configured, but saving config failed: {e}")
+    try:
+        subprocess.run(["systemctl", "--user", "restart", "librehub-daemon"],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if win:
+        win._refresh_content()
 
-        def clear_busy():
-            for b in action_btns:
-                b.set_sensitive(True)
 
-        def run_async(fn, busy_msg, on_done):
-            set_busy(busy_msg)
+def show_health_check(parent: Gtk.Window):
+    """On-demand diagnostics with one-click fixes (from Preferences/app menu)."""
+    from . import preflight
+    dlg = Gtk.Dialog(title="Health check", transient_for=parent, modal=True)
+    dlg.set_default_size(520, -1)
+    c = dlg.get_content_area()
+    c.set_border_width(14)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    c.add(box)
+    summary = Gtk.Label(xalign=0)
+    summary.set_line_wrap(True)
+    row_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    b_setup = Gtk.Button(label="Run system setup")
+    b_setup.get_style_context().add_class("lh-primary")
+    b_daemon = Gtk.Button(label="Start daemon")
+    b_daemon.get_style_context().add_class("lh-secondary")
+    b_restart = Gtk.Button(label="Restart daemon")
+    b_restart.get_style_context().add_class("lh-secondary")
+    b_mouse = Gtk.Button(label="Set up mouse")
+    b_mouse.get_style_context().add_class("lh-secondary")
+    for b in (b_setup, b_daemon, b_restart, b_mouse):
+        row_btns.pack_start(b, False, False, 0)
 
-            def work():
-                ok, msg = fn()
-                GLib.idle_add(finish, ok, msg)
+    managed = {}
+    try:
+        managed = C.load(C.config_path()).managed_buttons
+    except C.ConfigError:
+        pass
 
-            def finish(ok, msg):
-                if not state["alive"]:  # dialog closed mid-run; don't touch it
-                    return False
-                clear_busy()
-                on_done(ok, msg)
-                return False
+    def render():
+        for ch in box.get_children():
+            box.remove(ch)
+        checks = preflight.run_all(managed)
+        needs = {c.fix for c in checks if not c.ok}
+        for chk in checks:
+            icon = {preflight.Status.OK: "✅", preflight.Status.WARN: "⚠️",
+                    preflight.Status.FAIL: "❌"}[chk.status]
+            lbl = Gtk.Label(xalign=0)
+            lbl.set_line_wrap(True)
+            txt = (f"{icon}  <b>{GLib.markup_escape_text(chk.title)}</b> — "
+                   f"{GLib.markup_escape_text(chk.detail)}")
+            if not chk.ok and chk.remedy:
+                txt += (f"\n<small>{GLib.markup_escape_text(chk.remedy)}"
+                        "</small>")
+            lbl.set_markup(txt)
+            box.pack_start(lbl, False, False, 0)
+        box.pack_start(summary, False, False, 0)
+        box.pack_start(row_btns, False, False, 0)
+        b_setup.set_visible(preflight.FIX_PRIVILEGED in needs)
+        b_daemon.set_visible(preflight.FIX_START_DAEMON in needs)
+        b_restart.set_visible(preflight.FIX_RESTART_DAEMON in needs)
+        b_mouse.set_visible(preflight.FIX_SETUP_MOUSE in needs)
+        if all(c.ok for c in checks):
+            summary.set_markup("<b>All good — LibreHub is ready.</b>")
+        elif preflight.FIX_RELOGIN in needs:
+            summary.set_markup("<b>Log out and back in</b> to activate group "
+                               "access, then re-check.")
+        else:
+            summary.set_text("")
+        box.show_all()
+        b_setup.set_visible(preflight.FIX_PRIVILEGED in needs)
+        b_daemon.set_visible(preflight.FIX_START_DAEMON in needs)
+        b_restart.set_visible(preflight.FIX_RESTART_DAEMON in needs)
+        b_mouse.set_visible(preflight.FIX_SETUP_MOUSE in needs)
 
-            threading.Thread(target=work, daemon=True).start()
+    def run_async(fn):
+        def work():
+            ok, msg = fn()
+            GLib.idle_add(lambda: (render(), False)[1])
+        threading.Thread(target=work, daemon=True).start()
 
-        def on_setup(_b):
-            def done(ok, msg):
-                recheck()
-                self._message(msg, ok=ok, parent=dlg)
-            run_async(preflight.run_privileged_setup,
-                      "Running system setup — approve the password prompt…",
-                      done)
-
-        def on_daemon(_b):
-            def done(ok, msg):
-                self._refresh_status()
-                recheck()
-                if not ok:
-                    self._error(msg, parent=dlg)
-            run_async(preflight.start_daemon, "Starting daemon…", done)
-
-        def on_restart(_b):
-            def done(ok, msg):
-                self._refresh_status()
-                recheck()
-                if not ok:
-                    self._error(msg, parent=dlg)
-            run_async(preflight.restart_daemon, "Restarting daemon…", done)
-
-        def on_mouse(_b):
-            dlg.hide()  # its own dialogs are transient to the main window
-            self._on_setup_mouse(None)
-            dlg.show()
-            self._refresh_status()
-            recheck()
-
-        btn_setup.connect("clicked", on_setup)
-        btn_daemon.connect("clicked", on_daemon)
-        btn_restart.connect("clicked", on_restart)
-        btn_mouse.connect("clicked", on_mouse)
-        btn_recheck.connect("clicked", lambda _b: recheck())
-
-        initial = (checks if checks is not None
-                   else preflight.run_all(self.config.managed_buttons))
-        dlg.show_all()
-        render(initial)  # after show_all so per-button visibility sticks
-        dlg.run()
-        dlg.destroy()
+    b_setup.connect("clicked", lambda _b: run_async(
+        preflight.run_privileged_setup))
+    b_daemon.connect("clicked", lambda _b: run_async(preflight.start_daemon))
+    b_restart.connect("clicked", lambda _b: run_async(preflight.restart_daemon))
+    b_mouse.connect("clicked", lambda _b: (show_setup_mouse(dlg), render()))
+    dlg.add_button("Re-check", 1)
+    dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+    dlg.connect("response", lambda _d, r: render() if r == 1 else None)
+    render()
+    dlg.show_all()
+    render()
+    while dlg.run() == 1:
+        pass
+    dlg.destroy()
 
 
 def main(argv=None) -> int:
-    win = Window()
+    theme.install()
+    p = P.load()
+    if not C.config_path().exists():
+        from . import wizard
+        wizard.run_first_run(p)
+    win = MainWindow(prefs=p)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
     win.present()
