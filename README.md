@@ -1,299 +1,213 @@
 # LibreHub
 
-**Per-game mouse-button remapper for Linux** — the open answer to Logitech G HUB's per-game feature.
+**A free Logitech G HUB alternative for Linux, focused on per game mouse button remapping.**
 
-Assign gaming-mouse buttons to keyboard keys **per game**, switched automatically when a Steam game gets focus. No more manual remapping between titles.
+LibreHub lets you assign your gaming mouse buttons to keyboard keys, with a different set for every game. When you launch a Steam game, LibreHub switches to that game's buttons automatically. When you close it, everything goes back to normal. No manual reconfiguring between titles.
 
----
+If you moved to Linux and found that Logitech G HUB does not work, and you missed the one feature you actually used every day, this is built to bring that feature back.
 
-## Why LibreHub?
+Works with the Logitech G502 and other Logitech gaming mice, plus any mouse that ratbagd supports.
 
-Logitech G HUB does not run usefully on Linux. Its signature convenience — *different mouse-button-to-key mappings per game, applied automatically* — has no simple native equivalent:
+## Why this exists
 
-- `input-remapper` remaps globally but lacks per-game switching
-- `ratbagd`/Piper configure onboard profiles but cap at ~5 and require manual switching
+Logitech G HUB has no real Linux version. The part most gamers relied on was simple. You set your side buttons to do one thing in one game and something else in another, and it just happened when you switched games. On Linux there was no easy way to get that back.
 
-**LibreHub** is a focused, Linux-native app that gives you unlimited per-game profiles with automatic switching by Steam AppID.
+The tools that come close each miss something:
 
----
+* `input-remapper` can remap buttons, but it changes them everywhere at once. There is no per game switching.
+* `ratbagd` and Piper write profiles onto the mouse itself, but you only get about five of them and you have to switch by hand.
 
-## Requirements
+LibreHub fills that gap. You get as many game profiles as you want, and switching happens on its own based on the Steam game you are playing.
 
-- **Mouse:** Logitech (or other `ratbagd`-supported) gaming mouse with programmable buttons
-- **Display server:** X11 (precise per-window switching) or Wayland (running-game fallback — see [Auto-Switching](#auto-switching))
-- **Platform:** Steam on Linux
-- **Python:** 3.10 or later
-- **System packages** (`install.sh` detects your package manager and tells you
-  the exact names to install if any are missing):
+## What you need
 
-  | Purpose | Debian / Ubuntu / Mint (`apt`) | Fedora / RHEL (`dnf`) |
-  | --- | --- | --- |
-  | Python GTK3 bindings | `python3-gi` | `python3-gobject` |
-  | GTK3 introspection data | `gir1.2-gtk-3.0` | `gtk3` |
-  | `ratbagctl` utility | `ratbagd` | `libratbag-ratbagd` |
-  | evdev bindings (daemon's virtual-keyboard layer) | `python3-evdev` | `python3-evdev` |
-  | PolicyKit (usually preinstalled) — graphical password prompt for the in-app **Setup / Health check** | `policykit-1` | `polkit` |
+* **A mouse:** any Logitech gaming mouse with programmable buttons, or another mouse that ratbagd supports.
+* **Your display server:** X11 gives the most precise switching. Wayland works too, with a slightly simpler switching method described further down.
+* **Steam** on Linux.
+* **Python** 3.10 or newer.
+* **A few system packages.** The installer checks for these and tells you the exact names for your distro if any are missing.
 
-  Fedora one-liner: `sudo dnf install python3-gobject gtk3 python3-evdev libratbag-ratbagd`
+| What it is for | Debian, Ubuntu, Mint (apt) | Fedora, RHEL (dnf) |
+| --- | --- | --- |
+| Python GTK3 bindings | `python3-gi` | `python3-gobject` |
+| GTK3 data | `gir1.2-gtk-3.0` | `gtk3` |
+| The `ratbagctl` tool | `ratbagd` | `libratbag-ratbagd` |
+| evdev bindings | `python3-evdev` | `python3-evdev` |
+| PolicyKit, usually already installed | `policykit-1` | `polkit` |
 
----
+Fedora, all in one line:
 
-## Installation
+```bash
+sudo dnf install python3-gobject gtk3 python3-evdev libratbag-ratbagd
+```
+
+## Installing it
 
 ```bash
 ./install.sh
 ```
 
-**What it does:**
-1. Installs LibreHub and `librehub-daemon` commands via `pip`
-2. Installs a udev rule to allow the daemon to access `/dev/uinput` (requires `sudo`)
-3. Adds your user to the `input` group (requires `sudo`)
-4. Installs and enables the daemon as a systemd `--user` service
+Here is what that does:
 
-**Important:** After running `install.sh`, you must **log out and back in** for the `input` group membership to take effect. The daemon will start automatically on next login.
+1. Installs the `librehub` and `librehub-daemon` commands.
+2. Adds a udev rule so the background helper can reach `/dev/uinput`. This needs `sudo`.
+3. Adds your user to the `input` group. This also needs `sudo`.
+4. Sets up the background helper as a systemd user service and starts it.
 
-### First-run setup / Health check (in-app)
+**One important note.** After the install finishes, log out and log back in. The `input` group only takes effect on a fresh login. The helper starts on its own once you are back in.
 
-The GUI has a built-in **Setup / Health check** panel that automates everything
-above and diagnoses a half-finished setup. On first launch (or whenever
-something isn't ready) it opens automatically; you can also open it any time
-via the **"Setup / Health check"** button.
+### The built in setup and health check
 
-It verifies each requirement and offers a one-click fix where possible:
+The app has a Setup and Health check panel that does all of the above for you and tells you plainly if something is half finished. It opens by itself the first time you run the app, or any time something is not ready. You can also open it whenever you want from the **Setup / Health check** button.
 
-| Check | Fix offered |
+It checks each requirement and offers a one click fix where it can:
+
+| Check | Fix it offers |
 |-------|-------------|
-| System packages (`python3-evdev`, `ratbagd`) | **Run system setup** (installs via `pkexec` — one password prompt) |
-| `/dev/uinput` udev rule | **Run system setup** |
-| `input` group — present **and** active in this session | **Run system setup** to join; a clear **log out / back in** prompt to activate |
-| Daemon running & remapping active | **Start** / **Restart daemon** |
-| Mouse detected & buttons assigned | **Set up mouse** |
+| System packages | Runs the setup with a single password prompt |
+| The `/dev/uinput` rule | Runs the setup |
+| The `input` group, both joined and active | Joins you, then prompts you to log out and back in |
+| The helper running and remapping | Start or restart the helper |
+| Mouse found and buttons assigned | Set up the mouse |
 
-The "in the group but not active until re-login" distinction is called out
-explicitly — that's the most common first-run gotcha.
+That "joined the group but not active until you log back in" case is the most common first time snag, so the app calls it out clearly.
 
-Prefer the terminal? Run the same checks headlessly:
+Prefer the terminal? Run the same checks there:
 
 ```bash
-librehub-doctor        # or: python3 -m librehub.preflight
+librehub-doctor
 ```
 
----
+## Using it
 
-## Usage
+### Set up your mouse once
 
-### One-time mouse setup
+Each button you want to use needs to send a unique signal that nothing else on your system uses. LibreHub handles this with a guided dialog so you do not have to think about it:
 
-LibreHub's Layer 1 (see [How It Works](#how-it-works)) requires each mouse button you want to use to emit a unique signal, `KEY_F13`–`KEY_F24`, stored in the mouse's always-on onboard profile. **LibreHub now provides a guided in-app setup dialog** that automates this for you:
+1. Launch the app:
 
-1. **Launch the GUI:**
    ```bash
    librehub
    ```
 
-2. **Click "Set up mouse"** in the left pane.
-   - LibreHub scans your mouse and shows a dialog listing each remappable button with its current action
-   - Check the boxes next to the buttons you want to manage (LibreHub will exclude primary clicks: buttons 1, 2, 3)
+2. Click **Set up mouse** in the left pane. LibreHub scans your mouse and lists each button. Tick the ones you want to manage. It leaves your normal left, right, and middle clicks alone.
 
-3. **Click OK** to confirm.
-   - LibreHub assigns each checked button a unique F-signal (`KEY_F13`–`KEY_F24`), programs them into your mouse's profile 0, and activates that profile
-   - An info dialog appears confirming the setup is complete
+3. Click OK. LibreHub programs the chosen buttons into your mouse and confirms when it is done.
 
-4. **Restart the daemon** (if prompted).
-   - Click "Restart daemon" in the dialog, or run:
-     ```bash
-     systemctl --user restart librehub-daemon
-     ```
+4. Restart the helper if it asks you to, either with the button in the dialog or:
 
-After this one-time setup, LibreHub's **"Add binding (press a mouse button)"** flow will detect those buttons.
-
-#### Advanced: manual setup via ratbagctl
-
-If you prefer to configure buttons manually or your mouse is not fully supported by the GUI, you can use `ratbagctl` directly:
-
-1. **Find your device's short-name:**
    ```bash
-   ratbagctl list
+   systemctl --user restart librehub-daemon
    ```
 
-2. **Look up your button indices:**
-   ```bash
-   ratbagctl "<device>" info
-   ```
-   Note the button *indices* for the physical buttons you want to remap (e.g., the two thumb buttons might be indices `6` and `7`).
+After this, the **Add binding** flow can see those buttons.
 
-3. **Assign each button a unique F-signal in profile 0**, e.g.:
-   ```bash
-   ratbagctl "<device>" profile 0 button 6 action set macro KEY_F13
-   ratbagctl "<device>" profile 0 button 7 action set macro KEY_F14
-   ```
-   Use a different F-code (`KEY_F13`…`KEY_F24`) for each button you assign — one per profile-0 button, no repeats.
+### Set up a game
 
-4. **Make sure profile 0 is active:**
-   ```bash
-   ratbagctl "<device>" profile active set 0
-   ```
+1. Open the app:
 
-### Start the Daemon
-
-The daemon must be running for button detection and auto-switching to work:
-
-```bash
-# Already running as a systemd --user service from install.sh
-# If needed, start it manually:
-librehub-daemon
-```
-
-### Configure a Game
-
-1. **Launch the GUI:**
    ```bash
    librehub
    ```
-   The window shows a game list on the left and a bindings table on the right.
 
-2. **Add the game:**
-   - **Detect:** While the Steam game is running and focused, click **"Add game I'm playing now"** → the daemon detects the focused game and adds it
-   - **Manual:** Click **"Add by AppID…"**, enter the Steam AppID (find it at `steamdb.info`), and click OK
-   - The game now appears in the left list
+   You get a game list on the left and a table of button bindings on the right.
 
-3. **Select the game** in the left list to edit its bindings
+2. Add the game. While the Steam game is open and focused, click **Add game I'm playing now** and LibreHub detects it. Or click **Add by AppID** and type the Steam AppID, which you can look up at steamdb.info.
 
-4. **Add a binding:**
-   - Click **"Add binding (press a mouse button)"**
-   - Press the physical mouse button you want to bind
-   - A new row appears showing the button signal (e.g., `KEY_F13`)
+3. Click the game in the left list to edit it.
 
-5. **Set the output key:**
-   - Click the **"Key"** cell in that row
-   - Type the key you want it to send (e.g., `m`, `4`, `space`, `q`)
-   - Press Enter to confirm
+4. Click **Add binding**, then press the physical mouse button you want to use. A new row appears for it.
 
-6. **Repeat** for more buttons, then click **"Save"** to write the config
+5. Click the **Key** cell and type the key you want that button to send, like `m`, `4`, `space`, or `q`. Press Enter.
 
-### Auto-Switching
+6. Repeat for the other buttons, then click **Save**.
 
-Once a game is configured, LibreHub's daemon will:
-- Monitor which game has keyboard focus (via Steam AppID)
-- Automatically activate that game's bindings when it launches
-- Fall back to the `default` bindings when no mapped game is focused
+### Automatic switching
 
-**X11 vs Wayland.** On X11 the daemon reads the focused window precisely, so
-bindings apply only while the game is actually focused. Wayland has no
-unprivileged "which window is focused" query, so there the daemon uses a
-**running-game fallback**: if exactly one *configured* game is running, its
-profile is activated (detected via `/proc`, independent of the compositor).
-The daemon auto-detects the session and logs which mode it's in. Caveats on
-Wayland: bindings stay active while the game is running even if you alt-tab
-away, and if two configured games run at once the choice is ambiguous so it
-falls back to `default`.
+Once a game is set up, LibreHub watches which game has focus and turns on that game's buttons when it launches. When no set up game is focused, it falls back to your default buttons.
 
----
+**X11 and Wayland.** On X11, LibreHub reads exactly which window is focused, so your buttons apply only while the game is actually in front. Wayland does not let apps ask which window is focused without special permission, so there LibreHub uses a simpler rule: if exactly one game you have set up is running, it turns that game's buttons on. It figures out which session you are in and logs the mode it chose. Two small things to know on Wayland: your buttons stay on while the game is running even if you tab away, and if two set up games run at the same time it cannot tell which you mean, so it uses your default.
 
-## How It Works
+## How it works
 
-LibreHub uses a **two-layer architecture** for reliability and simplicity:
+LibreHub splits the job into two simple parts.
 
-### Layer 1: Signal (Hardware via ratbagd)
+**The signal.** Each managed button is set to send a unique function key that nothing else uses, one of F13 through F24. These live in an always on profile on the mouse itself, which is how LibreHub gets around the roughly five profile limit built into the hardware. Your normal clicks and scroll wheel are untouched.
 
-Each managed mouse button is configured (via `ratbagctl`) to emit a unique, otherwise-unused F-key (`KEY_F13`…`KEY_F24`). These live in a single always-active onboard profile on the mouse itself, bypassing the 5-profile hardware ceiling. Standard clicks and wheel remain unaffected.
+**The translation.** A small background helper watches for those function keys coming in, looks up the buttons for whatever game you are playing, and sends the real keys you chose. It checks for a game switch about twice a second. It never touches your mouse movement or your clicks, only the button to key translation.
 
-### Layer 2: Translation (Software Daemon)
+## What it does not do yet
 
-The `librehub-daemon`:
-1. Grabs the mouse's keyboard endpoint (where the F-codes arrive) exclusively
-2. Creates a virtual `uinput` keyboard for output
-3. Looks up the currently focused game's binding set (or the default)
-4. Maps incoming F-codes to the configured keys and injects them
-5. Detects game focus changes (~500ms poll): `_NET_ACTIVE_WINDOW` on X11, or
-   the running-game fallback on Wayland (see [Auto-Switching](#auto-switching))
+* One key per button for now, not full macros or key combos.
+* Steam games only. Other games need manual setup for now.
+* Logitech and ratbagd mice only. Broader mouse support is planned.
+* Wayland switching is by running game rather than by focused window. X11 has the precise version.
+* No hot plug rediscovery yet. If you unplug and replug your mouse mid session, restart the helper with `systemctl --user restart librehub-daemon`.
 
-**Result:** no interception of pointer movement or clicks; the daemon only handles button-to-key translation.
+## What is coming
 
----
+* Mouse hot plug support.
+* Macros and key combos like Ctrl plus Q.
+* Matching non Steam games by window title or process name.
+* A universal engine so any mouse works, not just Logitech.
+* Precise Wayland focus tracking to replace the running game fallback.
 
-## Limitations (v1)
+## Frequently asked questions
 
-- **One key per binding:** buttons map to single keys, not macros or modifier combos
-- **Steam games only:** AppID matching; non-Steam games require manual setup (planned for v2)
-- **Logitech/ratbagd mice only:** requires hardware that ratbagd supports (universal engine planned)
-- **Wayland switching is coarse:** precise per-window focus works on X11; on Wayland, switching is by running game (one configured game at a time) — see [Auto-Switching](#auto-switching)
+**Does Logitech G HUB work on Linux?**
+Not really. There is no proper Linux build, and the per game button feature most people want has no easy native replacement. LibreHub was made to bring that feature to Linux.
 
-### Known limitations
+**Is there a Logitech G HUB alternative for Linux?**
+Yes. LibreHub is a free and open source one, focused on the per game mouse button remapping that G HUB was known for.
 
-- **No hot-plug rediscovery:** the daemon discovers the mouse at startup only — if you plug/unplug the mouse during a session, restart the daemon with `systemctl --user restart librehub-daemon`
+**How do I remap mouse buttons per game on Linux?**
+Install LibreHub, set up your mouse once, then add a Steam game and assign keys to your buttons. LibreHub switches to that game's buttons on its own whenever the game is focused.
 
----
+**Does it work with the Logitech G502?**
+Yes. The G502 works, along with other Logitech gaming mice and any mouse that ratbagd supports.
 
-## Roadmap
-
-- **v2:** Mouse hot-plug rediscovery
-- **v2:** Macros and modifier combinations (Ctrl+Q, multi-key sequences)
-- **v2:** Non-Steam game matching (by window title, process name)
-- **v3:** Universal mouse engine (support any mouse via full evdev remapping)
-- **v3:** Precise Wayland focus tracking (per-compositor, e.g. KWin scripting) to replace the running-game fallback
-
-**Recently shipped:**
-- Wayland support via a running-game fallback (auto-detected; profile switches by which configured game is running)
-- In-app first-run **Setup / Health check** (diagnoses packages, udev rule, `input` group activation, daemon, and mouse setup; fixes via `pkexec`)
-- Guided in-app mouse setup ("Set up mouse" dialog auto-assigns F13–F24 via `ratbagd`)
-
----
-
-## Demo
-
-(Demo GIF to be added)
-
----
-
-## License
-
-MIT License. See `LICENSE` for details.
-
----
+**Does it work on Wayland?**
+Yes, with a simpler switching method than on X11. See the switching section above for the details.
 
 ## Troubleshooting
 
-**First stop:** open the in-app **Setup / Health check** (or run `librehub-doctor`).
-It pinpoints exactly which requirement is unmet and offers the fix.
+Start with the built in **Setup / Health check**, or run `librehub-doctor`. It points at the exact thing that is not ready and offers the fix.
 
-**"Daemon not running" in the GUI, but it looks like it's running?**
-The status now refreshes live, so a transient startup message clears on its own.
-If it persists, the daemon is genuinely unreachable — start it below.
+**The app says the helper is not running, but it looks like it is.**
+The status updates live, so a startup message usually clears on its own. If it sticks around, start the helper with the commands below.
 
-**"Running, but remapping is inactive"?**
-The daemon is up but couldn't grab the mouse's signal device — almost always
-because the `input` group isn't active in the daemon's session yet. Log out and
-back in if you just installed, then **restart the daemon**:
+**It says running but remapping is off.**
+The helper is up but could not grab the mouse signal, almost always because the `input` group is not active in this session yet. Log out and back in if you just installed, then restart it:
+
 ```bash
 systemctl --user restart librehub-daemon
 ```
 
-**Daemon not starting?**
+**The helper will not start.**
+
 ```bash
 systemctl --user status librehub-daemon.service
 systemctl --user enable --now librehub-daemon.service
 ```
 
-**Permission errors on `/dev/uinput`?**
-- Confirm you're in the `input` group: `id -nG | grep input`
-- If not listed, re-run `install.sh` and log out/in
+**Permission errors on `/dev/uinput`.**
+Check that you are in the `input` group with `id -nG | grep input`. If you are not, run `install.sh` again and log out and back in.
 
-**Mouse not detected?**
+**Mouse not found.**
+
 ```bash
 ratbagctl list
-# or check systemd logs:
 journalctl --user -u librehub-daemon.service -f
 ```
 
----
-
 ## Contributing
 
-LibreHub is an open-source project. Bug reports, feature requests, and pull requests are welcome.
+LibreHub is open source. Bug reports, feature ideas, and pull requests are all welcome.
 
----
+## License
+
+MIT. See `LICENSE`.
 
 ## Author
 
-Chris — originally built to migrate fully off Windows to Linux Mint Cinnamon.
+Chris. Built while moving fully off Windows to Linux.
