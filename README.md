@@ -23,14 +23,18 @@ Logitech G HUB does not run usefully on Linux. Its signature convenience — *di
 - **Display server:** X11 (precise per-window switching) or Wayland (running-game fallback — see [Auto-Switching](#auto-switching))
 - **Platform:** Steam on Linux
 - **Python:** 3.10 or later
-- **System packages:**
-  - `python3-gi` — Python GTK3 bindings
-  - `gir1.2-gtk-3.0` — GTK3 introspection data
-  - `ratbagd` — provides the `ratbagctl` command-line utility (the package is
-    named `libratbag-tools` on some distros, but `ratbagd` on Debian/Ubuntu/Mint)
-  - `python3-evdev` — evdev bindings (the daemon's virtual-keyboard layer)
-  - `policykit-1` (usually preinstalled) — lets the in-app **Setup / Health
-    check** perform privileged steps via a graphical password prompt
+- **System packages** (`install.sh` detects your package manager and tells you
+  the exact names to install if any are missing):
+
+  | Purpose | Debian / Ubuntu / Mint (`apt`) | Fedora / RHEL (`dnf`) |
+  | --- | --- | --- |
+  | Python GTK3 bindings | `python3-gi` | `python3-gobject` |
+  | GTK3 introspection data | `gir1.2-gtk-3.0` | `gtk3` |
+  | `ratbagctl` utility | `ratbagd` | `libratbag-ratbagd` |
+  | evdev bindings (daemon's virtual-keyboard layer) | `python3-evdev` | `python3-evdev` |
+  | PolicyKit (usually preinstalled) — graphical password prompt for the in-app **Setup / Health check** | `policykit-1` | `polkit` |
+
+  Fedora one-liner: `sudo dnf install python3-gobject gtk3 python3-evdev libratbag-ratbagd`
 
 ---
 

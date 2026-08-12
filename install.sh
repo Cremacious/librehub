@@ -11,15 +11,29 @@ BIN="$HOME/.local/bin"
 echo "Installing LibreHub from $REPO ..."
 
 # --- 1. Check system runtime dependencies -----------------------------------
+# Package names differ across distros; pick them (and the install command shown
+# in the hint) based on the detected package manager. Debian/Ubuntu/Mint use
+# apt; Fedora/RHEL use dnf. The dependency *checks* below are distro-agnostic.
+if command -v apt-get >/dev/null 2>&1; then
+  PKG_INSTALL="sudo apt install"
+  PKG_GTK="python3-gi gir1.2-gtk-3.0"; PKG_EVDEV="python3-evdev"; PKG_RATBAGD="ratbagd"
+elif command -v dnf >/dev/null 2>&1; then
+  PKG_INSTALL="sudo dnf install"
+  PKG_GTK="python3-gobject gtk3"; PKG_EVDEV="python3-evdev"; PKG_RATBAGD="libratbag-ratbagd"
+else
+  PKG_INSTALL="<your package manager> install"
+  PKG_GTK="python3-gobject gtk3"; PKG_EVDEV="python3-evdev"; PKG_RATBAGD="ratbagd/libratbag"
+fi
+
 missing=""
 python3 -c "import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk" 2>/dev/null \
-  || missing="$missing python3-gi gir1.2-gtk-3.0"
-python3 -c "import evdev" 2>/dev/null || missing="$missing python3-evdev"
-command -v ratbagctl >/dev/null 2>&1 || missing="$missing ratbagd"
+  || missing="$missing $PKG_GTK"
+python3 -c "import evdev" 2>/dev/null || missing="$missing $PKG_EVDEV"
+command -v ratbagctl >/dev/null 2>&1 || missing="$missing $PKG_RATBAGD"
 if [ -n "$missing" ]; then
   echo "Missing system packages:$missing"
   echo "Install them, then re-run this script:"
-  echo "  sudo apt install$missing"
+  echo "  $PKG_INSTALL$missing"
   exit 1
 fi
 

@@ -18,15 +18,29 @@ USER_NAME="${2:?usage: $0 <repo_dir> <target_user>}"
 echo "librehub-setup: repo=$REPO user=$USER_NAME"
 
 # --- 1. system packages (only if missing) -----------------------------------
+# Select package names + install command for the detected package manager so
+# this works on Debian/Ubuntu/Mint (apt) and Fedora/RHEL (dnf).
+if command -v apt-get >/dev/null 2>&1; then
+  PM_INSTALL="apt-get install -y"; PKG_RATBAGD="ratbagd"; PKG_EVDEV="python3-evdev"
+elif command -v dnf >/dev/null 2>&1; then
+  PM_INSTALL="dnf install -y"; PKG_RATBAGD="libratbag-ratbagd"; PKG_EVDEV="python3-evdev"
+else
+  PM_INSTALL=""; PKG_RATBAGD="ratbagd"; PKG_EVDEV="python3-evdev"
+fi
+
 missing=""
-command -v ratbagctl >/dev/null 2>&1 || missing="$missing ratbagd"
-python3 -c 'import evdev' >/dev/null 2>&1 || missing="$missing python3-evdev"
+command -v ratbagctl >/dev/null 2>&1 || missing="$missing $PKG_RATBAGD"
+python3 -c 'import evdev' >/dev/null 2>&1 || missing="$missing $PKG_EVDEV"
 if [ -n "$missing" ]; then
+  if [ -z "$PM_INSTALL" ]; then
+    echo "librehub-setup: no supported package manager (apt/dnf) found; install manually:$missing" >&2
+    exit 1
+  fi
   echo "librehub-setup: installing packages:$missing"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
+  # Refresh the package index on apt; dnf refreshes on demand.
+  [ "${PM_INSTALL%% *}" = "apt-get" ] && { export DEBIAN_FRONTEND=noninteractive; apt-get update; }
   # shellcheck disable=SC2086
-  apt-get install -y $missing
+  $PM_INSTALL $missing
 else
   echo "librehub-setup: packages already present"
 fi
