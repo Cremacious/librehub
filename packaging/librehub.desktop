@@ -2,6 +2,7 @@
 Type=Application
 Name=LibreHub
 Comment=Per-game mouse button remapper
+Icon=librehub
 Exec=librehub
 Terminal=false
 Categories=Utility;Settings;
