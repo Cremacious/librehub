@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "librehub"
-version = "0.1.0"
+version = "1.0.0"
 description = "Per-game mouse-button remapper for Linux — the open answer to G HUB's per-game feature"
 readme = "README.md"
 license = { text = "MIT" }
