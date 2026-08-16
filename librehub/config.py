@@ -71,7 +71,9 @@ def load(path: Path) -> Config:
         for k, v in managed_buttons_raw.items():
             signal_code = str(v)
             if signal_code not in keys.FSIGNALS:
-                raise ConfigError(f"managed_buttons value {signal_code!r} is not a valid signal (KEY_F13..KEY_F24)")
+                raise ConfigError(
+                    f"managed_buttons value {signal_code!r} is not a valid "
+                    "signal (KEY_F13..KEY_F24)")
             managed[str(k)] = signal_code
         games_raw = raw.get("games", {})
         if not isinstance(games_raw, dict):

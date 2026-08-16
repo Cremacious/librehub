@@ -54,7 +54,7 @@ def _evdev_importable() -> bool:
         import evdev
     except Exception:
         return False
-    return True
+    return evdev is not None
 
 
 def check_packages(evdev_ok: bool | None = None, which=shutil.which) -> Check:

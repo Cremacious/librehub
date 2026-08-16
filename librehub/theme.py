@@ -140,13 +140,16 @@ _probe: "Gtk.Box | None" = None
 
 FALLBACK_THEME = "Adwaita"
 
+
 def claim_identity() -> None:
     GLib.set_prgname(APP_ID)
     Gdk.set_program_class(WM_CLASS)
     Gtk.Window.set_default_icon_name(ICON_NAME)
 
+
 def is_light_color(red: float, green: float, blue: float) -> bool:
     return 0.299 * red + 0.587 * green + 0.114 * blue > 0.5
+
 
 def install() -> None:
     claim_identity()
@@ -159,6 +162,7 @@ def install() -> None:
         Gdk.Screen.get_default(), _provider,
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
+
 def _background_is_light() -> bool | None:
     global _probe
     if _probe is None:
@@ -167,6 +171,7 @@ def _background_is_light() -> bool | None:
     if not found:
         return None
     return is_light_color(color.red, color.green, color.blue)
+
 
 def apply_appearance(appearance: str) -> None:
     global _orig_prefer_dark, _orig_theme_name

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import socket
 import subprocess
@@ -918,7 +917,7 @@ class MainWindow(Gtk.Window):
             return
         dlg = self._dialog("Add binding", right="1 of 2", width=480)
         c = dlg.get_content_area()
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
 
         step = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         step.set_halign(Gtk.Align.CENTER)

@@ -50,7 +50,7 @@ def test_running_appids_tolerates_read_error():
         return {10: b"SteamAppId=552500\x00", 12: b"SteamAppId=1374490\x00"}[pid]
 
     assert focus.running_appids(pids=[10, 11, 12],
-                                 read_environ=flaky_read_environ) == [
+                                read_environ=flaky_read_environ) == [
         "552500", "1374490"]
 
 

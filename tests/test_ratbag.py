@@ -10,8 +10,10 @@ class FakeRun:
 
     def __call__(self, args, **kw):
         self.calls.append(args)
+
         class R:
             pass
+
         r = R()
         r.stdout = self.stdout
         r.returncode = self.returncode

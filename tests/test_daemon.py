@@ -1,5 +1,5 @@
 from pathlib import Path
-from librehub import daemon, config as C, focus, ratbag
+from librehub import daemon, config as C, ratbag
 
 
 class SpyEngine:
