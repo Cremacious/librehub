@@ -1,4 +1,3 @@
-"""Config data model and persistence for LibreHub."""
 from __future__ import annotations
 
 import json
@@ -101,4 +100,4 @@ def save(config: Config, path: Path) -> None:
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, path)  # atomic
+    os.replace(tmp, path)

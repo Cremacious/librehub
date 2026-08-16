@@ -63,7 +63,6 @@ def test_is_wayland_by_wayland_display():
 
 
 def test_is_wayland_by_socket(tmp_path):
-    # A systemd --user service lacks the env vars but the socket is present.
     (tmp_path / "wayland-0").write_text("")
     assert focus.is_wayland(environ={}, runtime_dir=str(tmp_path)) is True
 

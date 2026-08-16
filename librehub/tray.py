@@ -1,10 +1,3 @@
-"""System-tray indicator for LibreHub.
-
-Runs in the background with no taskbar window. Provides a tray icon whose
-menu opens the editor, restarts the daemon, or quits the tray. Tries the
-best available backend for the desktop: XApp (Cinnamon/Mint native), then
-Ayatana AppIndicator3, then the legacy GtkStatusIcon.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -13,11 +6,17 @@ import sys
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gtk
 
-from . import gui  # noqa: E402
+from . import gui, theme
 
-ICON_NAME = "input-mouse"
+FALLBACK_ICON_NAME = "input-mouse"
+
+
+def icon_name(theme_lookup=None) -> str:
+    lookup = theme_lookup or Gtk.IconTheme.get_default()
+    return (theme.ICON_NAME if lookup.has_icon(theme.ICON_NAME)
+            else FALLBACK_ICON_NAME)
 
 
 class Tray:
@@ -29,18 +28,17 @@ class Tray:
             try:
                 if setup():
                     break
-            except Exception:  # noqa: BLE001 - any backend failure -> try next
+            except Exception:
                 continue
         if self._backend is None:
             raise RuntimeError("no system tray backend available")
 
-    # --- actions ---
     def open_editor(self, *_args):
         if self._editor is not None:
             try:
                 self._editor.present()
                 return
-            except Exception:  # noqa: BLE001 - window was destroyed
+            except Exception:
                 self._editor = None
         win = gui.Window()
         win.connect("destroy", self._on_editor_closed)
@@ -69,12 +67,11 @@ class Tray:
         menu.show_all()
         return menu
 
-    # --- backends ---
     def _try_xapp(self) -> bool:
         gi.require_version("XApp", "1.0")
         from gi.repository import XApp
         icon = XApp.StatusIcon()
-        icon.set_icon_name(ICON_NAME)
+        icon.set_icon_name(icon_name())
         icon.set_tooltip_text("LibreHub")
         icon.set_primary_menu(self._menu())
         icon.set_secondary_menu(self._menu())
@@ -84,7 +81,7 @@ class Tray:
     def _try_appindicator(self) -> bool:
         gi.require_version("AyatanaAppIndicator3", "0.1")
         from gi.repository import AyatanaAppIndicator3 as AI
-        ind = AI.Indicator.new("librehub", ICON_NAME,
+        ind = AI.Indicator.new("librehub", icon_name(),
                                AI.IndicatorCategory.APPLICATION_STATUS)
         ind.set_status(AI.IndicatorStatus.ACTIVE)
         ind.set_title("LibreHub")
@@ -94,7 +91,7 @@ class Tray:
 
     def _try_statusicon(self) -> bool:
         icon = Gtk.StatusIcon()
-        icon.set_from_icon_name(ICON_NAME)
+        icon.set_from_icon_name(icon_name())
         icon.set_tooltip_text("LibreHub")
         menu = self._menu()
         icon.connect("activate", self.open_editor)
@@ -108,7 +105,7 @@ class Tray:
 
 def main(argv=None) -> int:
     try:
-        tray = Tray()  # keep a reference alive for the whole main loop
+        tray = Tray()
     except RuntimeError as e:
         print(f"LibreHub tray: {e}", file=sys.stderr)
         return 1

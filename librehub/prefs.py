@@ -1,8 +1,3 @@
-"""User preferences for the LibreHub editor (separate from the daemon config).
-
-Stored as JSON next to the daemon config. All keys are optional and fall back
-to sane defaults, so an old or missing file just yields defaults.
-"""
 from __future__ import annotations
 
 import json
@@ -14,7 +9,7 @@ _DEFAULTS = {
     "keep_above": True,
     "start_at_login": True,
     "tray_icon": False,
-    "appearance": "system",  # system | light | dark
+    "appearance": "system",
 }
 
 

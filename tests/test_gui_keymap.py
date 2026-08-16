@@ -1,15 +1,10 @@
-"""Tests for the pure key-capture helpers in the GUI module.
-
-Importing librehub.gui pulls in GTK/GDK, but these helpers don't need a
-display — only the keyval constants and keyval->unicode translation.
-"""
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk  # noqa: E402
+from gi.repository import Gdk
 
-from librehub import gui  # noqa: E402
+from librehub import gui
 
 
 def test_keyval_space():
@@ -86,3 +81,25 @@ def test_button_label_known_index():
 
 def test_button_label_unknown_falls_back_to_code():
     assert gui.button_label("KEY_F13", {}) == "F13"
+
+
+def test_valid_appid_is_digits():
+    assert gui.is_valid_appid("1086940")
+
+
+def test_valid_appid_ignores_surrounding_whitespace():
+    assert gui.is_valid_appid("  1086940 ")
+
+
+def test_empty_appid_is_invalid():
+    assert not gui.is_valid_appid("")
+    assert not gui.is_valid_appid("   ")
+
+
+def test_non_numeric_appid_is_invalid():
+    assert not gui.is_valid_appid("baldurs gate")
+    assert not gui.is_valid_appid("108694a")
+
+
+def test_appid_with_inner_space_is_invalid():
+    assert not gui.is_valid_appid("108 6940")

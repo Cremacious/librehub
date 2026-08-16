@@ -1,4 +1,3 @@
-"""Minimal newline-delimited JSON protocol for GUI<->daemon IPC."""
 from __future__ import annotations
 
 import json

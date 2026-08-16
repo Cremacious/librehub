@@ -1,11 +1,3 @@
-"""Active-window -> Steam AppID detection.
-
-On X11 this reads the focused window (``xprop``) and maps it to a Steam
-AppID. Wayland has no equivalent "which window is focused" query for
-unprivileged clients, so there we fall back to the running-process signal
-(``/proc/<pid>/environ``), which is display-server agnostic: if exactly one
-*configured* game is running, we assume that's the one being played.
-"""
 from __future__ import annotations
 
 import glob
@@ -57,7 +49,6 @@ def _proc_pids() -> list[int]:
 
 
 def running_appids(pids=None, read_environ=_read_environ) -> list[str]:
-    """Distinct Steam AppIDs across running processes (order of first sight)."""
     if pids is None:
         pids = _proc_pids()
     seen: list[str] = []
@@ -73,7 +64,6 @@ def running_appids(pids=None, read_environ=_read_environ) -> list[str]:
 
 
 def current_appid(run=subprocess.run, read_environ=_read_environ) -> str | None:
-    """Return the Steam AppID of the focused window's process, or None."""
     try:
         root = run(["xprop", "-root", "_NET_ACTIVE_WINDOW"],
                    capture_output=True, text=True, timeout=2).stdout
@@ -94,12 +84,6 @@ def current_appid(run=subprocess.run, read_environ=_read_environ) -> str | None:
 
 
 def is_wayland(environ=None, runtime_dir=None) -> bool:
-    """Whether the session is running under a Wayland compositor.
-
-    Robust inside a systemd --user service, which does NOT inherit
-    XDG_SESSION_TYPE/WAYLAND_DISPLAY: we also look for a ``wayland-*`` socket
-    in XDG_RUNTIME_DIR, which is present whenever a Wayland compositor is up.
-    """
     environ = os.environ if environ is None else environ
     if environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
         return True
@@ -112,11 +96,6 @@ def is_wayland(environ=None, runtime_dir=None) -> bool:
 
 
 def single_running_known_appid(known_appids, running=None) -> str | None:
-    """The one running AppID that is also configured, else None.
-
-    Returns None when zero or more than one configured game is running, so an
-    ambiguous situation falls back to the default profile rather than guessing.
-    """
     known = set(known_appids)
     if not known:
         return None

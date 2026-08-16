@@ -1,7 +1,3 @@
-"""First-run setup wizard — one decision per step, replacing the old
-health-check dialog's wall of text. Four steps: permissions → daemon →
-pick buttons → done. See design_handoff_librehub_ui/README.md screens 5–6.
-"""
 from __future__ import annotations
 
 import threading
@@ -9,10 +5,10 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
-from . import config as C  # noqa: E402
-from . import preflight, prefs as P, theme  # noqa: E402
+from . import config as C
+from . import preflight, prefs as P, theme
 
 _STEPS = 4
 
@@ -70,7 +66,6 @@ class Wizard(Gtk.Window):
 
         self._render()
 
-    # ------------------------------------------------------------------
     def _clear(self, box):
         for ch in box.get_children():
             box.remove(ch)
@@ -114,7 +109,6 @@ class Wizard(Gtk.Window):
         button.set_sensitive(False)
         button.set_label(msg)
 
-    # ------------------------------------------------------------------
     def _render(self):
         self.counter.set_text(f"Step {self.step} of {_STEPS}")
         for i, s in enumerate(self.segs):
@@ -140,7 +134,6 @@ class Wizard(Gtk.Window):
             self.step -= 1
             self._render()
 
-    # step 1 -----------------------------------------------------------
     def _step_permissions(self):
         self.body.pack_start(self._title("Give LibreHub permission"),
                              False, False, 0)
@@ -170,7 +163,6 @@ class Wizard(Gtk.Window):
         self.action.pack_end(cont, False, False, 0)
         self.action.pack_end(skip, False, False, 0)
 
-    # step 2 -----------------------------------------------------------
     def _step_daemon(self):
         self.body.pack_start(self._title("Start the background service"),
                              False, False, 0)
@@ -195,7 +187,6 @@ class Wizard(Gtk.Window):
         cont.connect("clicked", go)
         self.action.pack_end(cont, False, False, 0)
 
-    # step 3 -----------------------------------------------------------
     def _step_buttons(self):
         self.body.pack_start(self._title("Pick the buttons to manage"),
                              False, False, 0)
@@ -219,7 +210,6 @@ class Wizard(Gtk.Window):
         cont.connect("clicked", lambda _b: self._advance())
         self.action.pack_end(cont, False, False, 0)
 
-    # step 4 -----------------------------------------------------------
     def _step_done(self):
         self.body.pack_start(self._title("You're all set"), False, False, 0)
         self.body.pack_start(self._body_text(
@@ -234,7 +224,6 @@ class Wizard(Gtk.Window):
         self.action.pack_end(finish, False, False, 0)
 
     def _finish(self):
-        # Mark first-run done by ensuring a config file exists.
         if not C.config_path().exists():
             try:
                 C.save(C.default_config(), C.config_path())
@@ -244,7 +233,6 @@ class Wizard(Gtk.Window):
 
 
 def run_first_run(prefs: P.Prefs) -> None:
-    """Show the wizard and block until it closes (its own main loop)."""
     theme.install()
     w = Wizard(prefs)
     w.connect("destroy", Gtk.main_quit)

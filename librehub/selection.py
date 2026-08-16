@@ -1,4 +1,3 @@
-"""Pure logic for selecting the active binding set."""
 from __future__ import annotations
 
 from .config import Config

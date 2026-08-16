@@ -10,7 +10,7 @@ class FakeRun:
 
     def __call__(self, args, **kw):
         self.calls.append(args)
-        class R:  # noqa: D401 - simple stub
+        class R:
             pass
         r = R()
         r.stdout = self.stdout
@@ -72,7 +72,6 @@ def test_parse_buttons():
         "  Button: 6 is mapped to macro '↕J'\n"
     )
     got = ratbag.parse_buttons(info)
-    # only the (active) profile's buttons
     assert got[6] == "macro '↕J'"
 
 

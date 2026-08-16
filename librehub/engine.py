@@ -1,4 +1,3 @@
-"""Layer 2: translate grabbed signal keys into injected keystrokes."""
 from __future__ import annotations
 
 from evdev import InputDevice, UInput, ecodes, list_devices
@@ -7,7 +6,6 @@ from . import keys, selection
 
 
 def find_signal_device(model: str) -> str | None:
-    """Path of the mouse's keyboard endpoint (name matches model, has KEY_F13)."""
     f13 = ecodes.KEY_F13
     for path in list_devices():
         try:
@@ -29,7 +27,7 @@ class Engine:
         self._bindings = dict(bindings)
 
     def handle_event(self, code_name: str, value: int) -> None:
-        if value not in (0, 1):  # ignore autorepeat (2)
+        if value not in (0, 1):
             return
         out = selection.resolve_output(self._bindings, code_name)
         if out is None:
@@ -56,10 +54,10 @@ class Engine:
                     continue
                 if event.value == 1 and on_detect is not None and on_detect(name):
                     pending_releases.add(name)
-                    continue  # consumed by detect mode
+                    continue
                 if event.value == 0 and name in pending_releases:
                     pending_releases.discard(name)
-                    continue  # swallow paired release for a detected button
+                    continue
                 self.handle_event(name, event.value)
         finally:
             dev.ungrab()

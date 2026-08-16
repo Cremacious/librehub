@@ -1,19 +1,3 @@
-"""First-run health checks and (pkexec) remediation for LibreHub.
-
-Turns the manual setup runbook — install the system packages, install the
-udev rule, join the ``input`` group (and log back in), start the daemon, set
-up the mouse — into machine-checkable state plus, where possible, one-click
-fixes.
-
-Importable without evdev or GTK present, so it can honestly report that
-those very dependencies are missing; evdev is imported lazily inside the one
-check that needs it. The privileged steps are performed by
-``packaging/librehub-setup-privileged.sh`` run once via ``pkexec`` (a single
-graphical password prompt for packages + udev rule + group membership).
-
-Run ``python3 -m librehub.preflight`` for a plain-text report — the same
-thing the GUI "Setup / Health check" dialog renders.
-"""
 from __future__ import annotations
 
 import getpass
@@ -31,12 +15,11 @@ UDEV_RULE = "/etc/udev/rules.d/99-librehub-uinput.rules"
 UINPUT_DEV = "/dev/uinput"
 INPUT_GROUP = "input"
 
-# Machine-readable hints telling the GUI which fix applies to a failed check.
-FIX_PRIVILEGED = "privileged"          # run the pkexec setup helper
-FIX_START_DAEMON = "start_daemon"      # systemctl --user enable --now
-FIX_RESTART_DAEMON = "restart_daemon"  # systemctl --user restart
-FIX_SETUP_MOUSE = "setup_mouse"        # existing "Set up mouse" flow
-FIX_RELOGIN = "relogin"                # nothing to run — user must log out/in
+FIX_PRIVILEGED = "privileged"
+FIX_START_DAEMON = "start_daemon"
+FIX_RESTART_DAEMON = "restart_daemon"
+FIX_SETUP_MOUSE = "setup_mouse"
+FIX_RELOGIN = "relogin"
 
 
 class Status(Enum):
@@ -62,22 +45,19 @@ class Check:
 def _current_user() -> str:
     try:
         return getpass.getuser()
-    except Exception:  # pragma: no cover - getuser is extremely reliable
+    except Exception:
         return os.environ.get("USER", "")
 
 
 def _evdev_importable() -> bool:
     try:
-        import evdev  # noqa: F401
+        import evdev
     except Exception:
         return False
     return True
 
 
-# --- individual checks -------------------------------------------------------
-
 def check_packages(evdev_ok: bool | None = None, which=shutil.which) -> Check:
-    """python3-evdev importable and ratbagctl on PATH."""
     evdev_ok = _evdev_importable() if evdev_ok is None else evdev_ok
     missing = []
     if not evdev_ok:
@@ -94,7 +74,6 @@ def check_packages(evdev_ok: bool | None = None, which=shutil.which) -> Check:
 
 def check_uinput(rule_path: str = UDEV_RULE, dev_path: str = UINPUT_DEV,
                  exists=os.path.exists) -> Check:
-    """The udev rule is installed and /dev/uinput exists."""
     if not exists(dev_path):
         return Check("uinput", "Virtual keyboard (/dev/uinput)", Status.FAIL,
                      "/dev/uinput is missing",
@@ -111,13 +90,6 @@ def check_uinput(rule_path: str = UDEV_RULE, dev_path: str = UINPUT_DEV,
 
 def check_input_group(user: str | None = None, getgroups=os.getgroups,
                       getgrnam=None) -> Check:
-    """User is in the ``input`` group *and* it's active in this session.
-
-    The persistent-vs-active split is the crux of the confusing first-run
-    failure: ``usermod -aG`` updates /etc/group immediately, but the running
-    login session (and every process under it, including the systemd --user
-    daemon) keeps its old group list until the next login.
-    """
     if getgrnam is None:
         import grp
         getgrnam = grp.getgrnam
@@ -144,7 +116,6 @@ def check_input_group(user: str | None = None, getgroups=os.getgroups,
 
 
 def check_daemon(request=None) -> Check:
-    """The daemon is running and reachable over IPC (and remapping is live)."""
     st = (request or status_request)()
     if not st or not st.get("daemon"):
         return Check("daemon", "Daemon", Status.FAIL, "not reachable",
@@ -162,12 +133,11 @@ def check_daemon(request=None) -> Check:
 
 
 def check_mouse(resolve=None) -> Check:
-    """A ratbagd-supported mouse is detected."""
     from . import ratbag
     resolve = resolve or ratbag.resolve_device
     try:
         dev = resolve()
-    except Exception as e:  # RatbagError, but stay robust in the report
+    except Exception as e:
         return Check("mouse", "Mouse", Status.WARN, f"detection failed: {e}",
                      "Ensure ratbagd is running and a supported mouse is "
                      "plugged in.")
@@ -178,7 +148,6 @@ def check_mouse(resolve=None) -> Check:
 
 
 def check_mouse_setup(managed_buttons) -> Check:
-    """At least one button has been assigned an F13–F24 signal."""
     if managed_buttons:
         return Check("mouse_setup", "Mouse buttons", Status.OK,
                      f"{len(managed_buttons)} button(s) configured")
@@ -189,7 +158,6 @@ def check_mouse_setup(managed_buttons) -> Check:
 
 
 def run_all(managed_buttons=None) -> list[Check]:
-    """Every check, in dependency order (earlier failures cause later ones)."""
     return [
         check_packages(),
         check_uinput(),
@@ -200,10 +168,7 @@ def run_all(managed_buttons=None) -> list[Check]:
     ]
 
 
-# --- fixes -------------------------------------------------------------------
-
 def status_request(timeout: float = 1.5) -> dict | None:
-    """Query the daemon's status over the IPC socket (short timeout)."""
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout)
@@ -217,7 +182,6 @@ def status_request(timeout: float = 1.5) -> dict | None:
 
 
 def privileged_helper_path() -> Path:
-    """packaging/librehub-setup-privileged.sh alongside the source tree."""
     return (Path(__file__).resolve().parent.parent
             / "packaging" / "librehub-setup-privileged.sh")
 
@@ -225,12 +189,6 @@ def privileged_helper_path() -> Path:
 def run_privileged_setup(user: str | None = None, helper: Path | None = None,
                          pkexec: str | None = None,
                          run=subprocess.run) -> tuple[bool, str]:
-    """Run the one-time privileged setup helper via pkexec.
-
-    Installs any missing packages, the udev rule, and adds the user to the
-    ``input`` group — all behind a single graphical password prompt. Returns
-    ``(ok, message)``.
-    """
     user = user or _current_user()
     helper = helper or privileged_helper_path()
     repo_dir = str(helper.resolve().parent.parent)
@@ -255,7 +213,6 @@ def run_privileged_setup(user: str | None = None, helper: Path | None = None,
 
 
 def start_daemon(run=subprocess.run) -> tuple[bool, str]:
-    """Enable and start the systemd --user daemon service."""
     try:
         res = run(["systemctl", "--user", "enable", "--now",
                    "librehub-daemon"], capture_output=True, text=True,
@@ -268,7 +225,6 @@ def start_daemon(run=subprocess.run) -> tuple[bool, str]:
 
 
 def restart_daemon(run=subprocess.run) -> tuple[bool, str]:
-    """Restart the daemon so it re-resolves group access and the mouse."""
     try:
         res = run(["systemctl", "--user", "restart", "librehub-daemon"],
                   capture_output=True, text=True, timeout=15)
@@ -278,8 +234,6 @@ def restart_daemon(run=subprocess.run) -> tuple[bool, str]:
         return True, "Daemon restarted."
     return False, (res.stderr or "").strip() or f"exit code {res.returncode}"
 
-
-# --- text report (python3 -m librehub.preflight) -----------------------------
 
 def format_report(checks) -> str:
     sym = {Status.OK: "[ OK ]", Status.WARN: "[WARN]", Status.FAIL: "[FAIL]"}

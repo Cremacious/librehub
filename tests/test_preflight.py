@@ -8,8 +8,6 @@ class _Grp:
         self.gr_mem = list(members)
 
 
-# --- packages ---------------------------------------------------------------
-
 def test_packages_ok():
     c = P.check_packages(evdev_ok=True, which=lambda name: "/usr/bin/ratbagctl")
     assert c.status is Status.OK and c.ok
@@ -27,8 +25,6 @@ def test_packages_partial_missing():
     assert c.status is Status.FAIL
     assert "ratbagd" in c.detail and "python3-evdev" not in c.detail
 
-
-# --- uinput -----------------------------------------------------------------
 
 def test_uinput_ok():
     c = P.check_uinput(exists=lambda p: True)
@@ -49,8 +45,6 @@ def test_uinput_missing_rule():
     assert "udev" in c.detail.lower()
 
 
-# --- input group (the crux of the confusing first-run failure) --------------
-
 def test_input_group_active_is_ok():
     c = P.check_input_group(user="chris", getgroups=lambda: [995],
                             getgrnam=lambda n: _Grp(995, ["chris"]))
@@ -58,7 +52,6 @@ def test_input_group_active_is_ok():
 
 
 def test_input_group_member_but_not_active_needs_relogin():
-    # In /etc/group, but this session's group list predates it.
     c = P.check_input_group(user="chris", getgroups=lambda: [1000],
                             getgrnam=lambda n: _Grp(995, ["chris"]))
     assert c.status is Status.WARN and c.fix == P.FIX_RELOGIN
@@ -78,8 +71,6 @@ def test_input_group_missing_group():
     assert c.status is Status.FAIL and c.fix == P.FIX_PRIVILEGED
 
 
-# --- daemon -----------------------------------------------------------------
-
 def test_daemon_down():
     c = P.check_daemon(request=lambda: None)
     assert c.status is Status.FAIL and c.fix == P.FIX_START_DAEMON
@@ -96,8 +87,6 @@ def test_daemon_running_but_remapping_inactive():
                                         "remapping": False})
     assert c.status is Status.WARN and c.fix == P.FIX_RESTART_DAEMON
 
-
-# --- mouse + mouse setup ----------------------------------------------------
 
 def test_mouse_detected():
     c = P.check_mouse(resolve=lambda: "logitech-g502")
@@ -118,8 +107,6 @@ def test_mouse_setup_empty_suggests_setup():
     c = P.check_mouse_setup({})
     assert c.status is Status.WARN and c.fix == P.FIX_SETUP_MOUSE
 
-
-# --- fixes ------------------------------------------------------------------
 
 def test_run_privileged_setup_without_pkexec_falls_back_to_instructions():
     ok, msg = P.run_privileged_setup(user="chris", pkexec="",
@@ -193,8 +180,6 @@ def test_restart_daemon_success():
     assert ok is True
     assert calls == [["systemctl", "--user", "restart", "librehub-daemon"]]
 
-
-# --- report -----------------------------------------------------------------
 
 def test_format_report_marks_and_indents_remedies():
     checks = [

@@ -1,9 +1,8 @@
-"""Translate human key names to evdev key codes."""
 import re
 
 from evdev import ecodes
 
-FSIGNALS = [f"KEY_F{n}" for n in range(13, 25)]  # KEY_F13 .. KEY_F24
+FSIGNALS = [f"KEY_F{n}" for n in range(13, 25)]
 
 _ALIASES = {
     "space": "KEY_SPACE",
@@ -36,19 +35,12 @@ _ALIASES = {
     "right": "KEY_RIGHT",
 }
 
-# Examples shown in error messages so users know what's accepted.
 EXAMPLES = "e.g. r, 4, space, enter, esc, tab, shift, f1, up"
 
 _FKEY_RE = re.compile(r"[fF](\d{1,2})")
 
 
 def to_code(name: str) -> int:
-    """Return the evdev key code for a user key name, or raise ValueError.
-
-    Accepts single letters/digits (``r``, ``4``), function keys ``f1``-``f24``,
-    a set of friendly aliases (``space``, ``enter``, ``esc``, ...), and explicit
-    ``KEY_*`` names.
-    """
     raw = name.strip()
     if not raw:
         raise ValueError("empty key name")

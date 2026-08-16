@@ -1,13 +1,3 @@
-"""Thin wrapper over the `ratbagctl` CLI (Layer 1 signal setup).
-
-Backs the one-time mouse setup described in the README (assigning each
-physical button a unique KEY_F13-KEY_F24 signal in the mouse's onboard
-profile 0, and activating that profile). That step is currently manual;
-this module is also the intended foundation for the planned guided
-in-app first-run setup, so it is intentionally invoked by setup tooling
-and documentation rather than by the GUI/daemon at runtime — do not
-treat it as dead code.
-"""
 from __future__ import annotations
 
 import re
@@ -59,7 +49,6 @@ _BTN_RE = re.compile(r"Button:\s+(\d+)\s+is mapped to (.+?)\s*$")
 
 
 def parse_buttons(info_output: str) -> dict[int, str]:
-    """Return {button_index: action_text} for the active profile."""
     result: dict[int, str] = {}
     in_active = False
     for line in info_output.splitlines():
@@ -90,7 +79,6 @@ def set_active_profile(dev: str, profile: int, run=subprocess.run) -> None:
 
 
 def device_info(dev: str, run=subprocess.run) -> str:
-    """Return the stdout of `ratbagctl <dev> info`."""
     res = _run(["ratbagctl", dev, "info"], run)
     if res.returncode != 0:
         raise RatbagError(f"reading info for {dev} failed")
@@ -98,7 +86,6 @@ def device_info(dev: str, run=subprocess.run) -> str:
 
 
 def parse_profile_buttons(info_output: str, profile: int) -> dict[int, str]:
-    """Return {button_index: action_text} for the given profile number."""
     result: dict[int, str] = {}
     in_profile = False
     for line in info_output.splitlines():
@@ -116,7 +103,6 @@ def parse_profile_buttons(info_output: str, profile: int) -> dict[int, str]:
 
 
 def next_free_signals(used, count: int) -> list[str]:
-    """Return the first `count` fcodes from keys.FSIGNALS not present in `used`."""
     used_set = set(used)
     free = [code for code in keys.FSIGNALS if code not in used_set]
     if len(free) < count:
@@ -127,12 +113,6 @@ def next_free_signals(used, count: int) -> list[str]:
 
 
 def signals_in_use(profile_buttons: dict[int, str]) -> set[str]:
-    """Return the F-signals currently assigned to any button in the map.
-
-    ratbagctl renders a KEY_F13 macro with the token after `KEY_` (e.g.
-    `F13`) embedded in the action text, e.g. `macro '↕F13'`. We detect a
-    signal by substring match of that token against each action text.
-    """
     result: set[str] = set()
     for action in profile_buttons.values():
         for fcode in keys.FSIGNALS:
@@ -145,19 +125,6 @@ def signals_in_use(profile_buttons: dict[int, str]) -> set[str]:
 def plan_signal_assignment(
     previously_managed: dict[str, str], checked, reserved: set[str]
 ) -> tuple[dict[str, str], dict[int, str]]:
-    """Plan fcode allocation for the checked buttons.
-
-    `previously_managed` is the current {index_str: fcode} mapping,
-    `checked` is the iterable of button indices the user checked, and
-    `reserved` is the set of fcodes that must not be handed to a newly
-    allocated button (e.g. signals live on the hardware but no longer
-    tracked, or codes already in use by other managed buttons).
-
-    Returns (final_managed, new_assignments):
-      - final_managed: {str(index): fcode} for every checked index.
-      - new_assignments: {index: fcode} for only the newly-allocated
-        buttons (the ones needing a hardware assign_signal call).
-    """
     checked = list(checked)
     kept: dict[int, str] = {}
     new_indices: list[int] = []
