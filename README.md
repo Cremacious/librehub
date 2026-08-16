@@ -174,6 +174,24 @@ ratbagctl list
 journalctl --user -u librehub-daemon.service -f
 ```
 
+## Frequently asked questions
+
+### Does Logitech G HUB work on Linux?
+
+No. Logitech does not ship G HUB for Linux, and there is no official replacement. LibreHub covers the part most people used it for: assigning mouse buttons per game.
+
+### What is the Linux equivalent of Logitech G HUB?
+
+For onboard settings like DPI and lighting, Piper and ratbagd. Neither switches profiles per game, which is what LibreHub adds.
+
+### Can I remap Logitech G502 side buttons on Linux?
+
+Yes. That is the case LibreHub was built and tested against.
+
+### Does it work with mice from other brands?
+
+Any mouse ratbagd supports should work, though I have only tested a G502 myself. Run `ratbagctl list` to see whether yours is detected.
+
 ## Contributing
 
 LibreHub is open source. Bug reports, feature ideas, and pull requests are all welcome.
