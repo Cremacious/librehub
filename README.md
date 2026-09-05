@@ -1,6 +1,6 @@
 # LibreHub
 
-**A free Logitech G HUB alternative for Linux, focused on per game mouse button remapping.**
+**A Logitech G HUB alternative for Linux, focused on per game mouse button remapping.**
 
 LibreHub lets you assign your gaming mouse buttons to keyboard keys, with a different profile for every game. When you launch a Steam game, LibreHub switches to that game's profile automatically.
 
